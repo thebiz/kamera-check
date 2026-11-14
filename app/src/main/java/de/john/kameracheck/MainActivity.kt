@@ -302,7 +302,24 @@ class MainActivity : Activity() {
             topMargin = dp(12f); leftMargin = dp(12f)
         })
 
-        root.addView(previewBox, LinearLayout.LayoutParams(screenW, screenW * 4 / 3))
+        // Die Vorschau bekommt den Platz, den das Bedienfeld übrig lässt – immer im Seitenverhältnis 3:4,
+        // damit Auslöser und Hinweise nie abgeschnitten werden
+        val previewArea = FrameLayout(this).apply { setBackgroundColor(BG) }
+        previewArea.addView(previewBox, FrameLayout.LayoutParams(screenW, screenW * 4 / 3, Gravity.CENTER))
+        previewArea.addOnLayoutChangeListener { v, l, t, r, b, _, _, _, _ ->
+            val aw = r - l
+            val ah = b - t
+            if (aw <= 0 || ah <= 0) return@addOnLayoutChangeListener
+            val w = min(aw, ah * 3 / 4)
+            val h = w * 4 / 3
+            val lp = previewBox.layoutParams as FrameLayout.LayoutParams
+            if (lp.width != w || lp.height != h) {
+                lp.width = w
+                lp.height = h
+                v.post { previewBox.layoutParams = lp }
+            }
+        }
+        root.addView(previewArea, LinearLayout.LayoutParams(-1, 0, 1f))
 
         // Bedienfeld
         val panel = LinearLayout(this).apply {
@@ -419,7 +436,7 @@ class MainActivity : Activity() {
         }
         panel.addView(hint, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10f) })
 
-        root.addView(panel, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(panel, LinearLayout.LayoutParams(-1, -2))
         setContentView(root)
 
         texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
