@@ -1,0 +1,48 @@
+# Erfindungs- und Ideenprotokoll – Kamera-Check / KI-Zoom
+
+**Urheber der Ideen und Produktrichtung:** John (Repository `thebiz/kamera-check`)
+**Umsetzung:** gemeinsam mit Claude (Anthropic) als Programmierwerkzeug
+
+Dieses Dokument hält fest, welche Ansätze wann entstanden und umgesetzt wurden.
+Jede Änderung ist zusätzlich durch die Git-Historie (Commit-Datum, Inhalt) belegt.
+Es ersetzt keine rechtliche Beratung.
+
+---
+
+## 14.11.2026
+
+### Ausgangsidee (John)
+Eine Handy-Kamera-App für das Poco X7 Pro, die ohne optischen Zoom durch Rechnen –
+Mehrbild-Technik und KI – scharfe Zoom-Aufnahmen entfernter Motive liefert
+(Kirchen, Gebäude, Statuen in Hamburg) und auch Makro kann. Ziel: Grenzen der
+Hersteller-Software austesten und überwinden.
+
+### Umgesetzte Bausteine (Version, Kurzbeschreibung)
+
+| Version | Ansatz |
+|---|---|
+| 0.1 | Kamera-Freigaben auslesen, inkl. Suche nach vom Hersteller nicht gemeldeten Kameras (gefunden: Ultraweitwinkel und logische Mehrfachkamera) |
+| 0.2 | Bildserie (Burst) aus dem vollen Sensorbild, eigener Zoom-Ausschnitt, Ausrichten und Verrechnen |
+| 0.3 | KI-Hochskalierung auf dem Gerät (Real-ESRGAN) mit automatischer Wahl KI-Chip/Prozessor; **Live-KI-Lupe** in der Vorschau |
+| 0.4 | Gewichtsmischung zweier KI-Modellvarianten für natürlichere Schrift; Vergleichsansicht mit verschiebbarer Linie und KI-Anteil-Regler |
+| 0.5 | **Mehrbild-Superauflösung direkt aus RAW-Bayer-Daten**: Abtastwerte aller Bilder an ihrer exakten Position auf ein feineres Raster verteilt; **Angleichung an das Kamera-Farbbild** über geschätzte Tonkurve und großflächige Verstärkungskarte (keine eigene Farbentwicklung nötig); KI läuft erst auf dem Mehrbild |
+| 0.6 | Fokusrahmen, der per Bildvergleich am Objekt „klebt“; Auslöse-Ring mit Vibration |
+| 0.7 | **Eigener Kontrast-Autofokus** (Durchlauf grob/fein, Schärfe nur im Rahmen gemessen, Entfernung festhalten, periodisch fein nachprüfen) statt Hersteller-Autofokus; kachelweises Ausrichten mit Ausreißer-Abwertung und Übergang lokal→global; bis zu 30 RAW-Bilder nach Speicherbudget; großes KI-Modell als Stark-Modus mit Zeitbudget |
+| 0.8 | **Unschärfe messen und KI-Eingang anpassen**: Aus Kanten (Sprunghöhe / maximale Steigung) wird die Unschärfe σ berechnet; das Bild wird vor der KI so verkleinert, dass die Rest-Unschärfe im Trainingsbereich der KI liegt (≈ 1–1,8 px, abhängig von σ). Beseitigt den „Saum“ um Schrift |
+| 0.9 | **Schrift als Eichmaß** (Johns Idee): erkannte Buchstaben liefern echte Sprungkanten, an denen die Unschärfe bevorzugt gemessen wird; **richtungsabhängige Unschärfe** (σx/σy) und getrenntes Verkleinern je Richtung vor der KI; **Lagesensor** misst die Verwacklung jedes Bildes der Serie (Drehrate × Belichtungszeit × Brennweite in Pixeln) – verwackelte Bilder werden abgewertet oder aussortiert |
+
+### Ideen für später (Stand 14.11.2026)
+- Schrift-Eichmaß weiterdenken: Form des erkannten Buchstabens als Vorlage für die
+  Unschärfe-Form (Punktbildfunktion), ohne die Buchstaben selbst zu „verschönern“
+- Ohne Schrift: gerade Linien (Fensterrahmen, Mauerfugen) gezielt als Eichkanten nutzen
+- Einmalige **Vermessung des Objektivs** mit einem Testmuster auf dem Monitor
+  (Unschärfe je Bildbereich und Zoomstufe) – gerätespezifisches Eigenwissen
+- **Fokusreihe** (mehrere Fokusentfernungen) und **zweite Kamera** als zusätzliche Information
+- Lagesensor auch für die Wahl des Referenzbildes und zur Vorhersage der Verschiebung beim Ausrichten
+
+### Messbelege (Simulation, reproduzierbar mit `tools/sim/`)
+- RAW-Mehrbild vs. Kamera-Einzelbild (kleine Schrift): PSNR 29,2 dB vs. 27,4 dB
+- KI auf Mehrbild statt Einzelbild: 28,8 dB vs. 26,9 dB, Buchstaben deutlich richtiger
+- Kachelweises Ausrichten bei Handdrehung: 28,7 dB vs. 28,5 dB, ohne Drehung kein Verlust
+- Unschärfe-angepasster KI-Eingang bei σ = 4 px: Fehler 0,025 vs. 0,050 (halbiert)
+- Richtungsabhängig bei einseitiger Verwacklung (σx = 5, σy = 1,5): Fehler 0,028 vs. 0,037

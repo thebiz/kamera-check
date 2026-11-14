@@ -11,8 +11,8 @@ android {
         applicationId = "de.john.kameracheck"
         minSdk = 30
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.8"
+        versionCode = 9
+        versionName = "0.9"
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -47,4 +47,6 @@ android {
 
 dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    // Texterkennung auf dem Gerät (Schrift als Eichmaß für die Unschärfe)
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 }

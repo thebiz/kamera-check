@@ -63,6 +63,8 @@ object RawSR {
         yuvRefY: ByteArray,
         mergedY: FloatArray,
         threads: Int,
+        /** Gewicht je Bild (z. B. aus dem Lagesensor: verwackelt → klein), null = alle gleich */
+        frameWeights: FloatArray? = null,
         progress: (String) -> Unit,
     ): Out {
         val w = g.rw
@@ -133,7 +135,9 @@ object RawSR {
                 Thread {
                     for (k in good) {
                         val raw = raws[k] ?: continue
-                        splatChannel(raw, w, h, g, c, color, p, scale, fields[k]!!, ox, oy, u, rad, inv2s2, acc, wt, wo, b0, b1)
+                        val fwk = frameWeights?.getOrNull(k) ?: 1f
+                        if (fwk <= 0f) continue
+                        splatChannel(raw, w, h, g, c, color, p, scale, fields[k]!!, ox, oy, u, rad, inv2s2, acc, wt, wo, b0, b1, fwk)
                     }
                 }.also { it.start() }
             }
@@ -385,7 +389,7 @@ object RawSR {
     private fun splatChannel(
         raw: ShortArray, w: Int, h: Int, g: Geo, c: Int, color: IntArray, p: Params, scale: FloatArray,
         fld: Field, ox: Float, oy: Float, u: Float, rad: Int, inv2s2: Float,
-        acc: FloatArray, wt: FloatArray, wo: Int, b0: Int, b1: Int,
+        acc: FloatArray, wt: FloatArray, wo: Int, b0: Int, b1: Int, frameWeight: Float = 1f,
     ) {
         val wx = FloatArray(2 * rad + 2)
         val wy = FloatArray(2 * rad + 2)
@@ -434,7 +438,7 @@ object RawSR {
                     val k1 = if (nx > 1) kx + 1 else kx
                     val dx = rdx[kx] * (1 - ax) + rdx[k1] * ax + ox
                     val dy = rdy[kx] * (1 - ax) + rdy[k1] * ax + oy
-                    val fw = rwt[kx] * (1 - ax) + rwt[k1] * ax
+                    val fw = (rwt[kx] * (1 - ax) + rwt[k1] * ax) * frameWeight
 
                     val oyc = (g.y0 + j + dy - g.cy + 0.5f) * u - 0.5f
                     val iy0 = floor(oyc).toInt() - rad + 1

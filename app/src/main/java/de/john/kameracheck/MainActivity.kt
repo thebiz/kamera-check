@@ -112,6 +112,9 @@ class MainActivity : Activity() {
     private var pendingTrackStart = false
     private var draggingFocus = false
 
+    // ── Lagesensor ──
+    private val gyro = GyroLog()
+
     // ── KI ──
     @Volatile private var ai: AiUpscaler? = null
     private val aiWorker = Executors.newSingleThreadExecutor()
@@ -594,6 +597,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         orientationListener.enable()
+        gyro.start(getSystemService(android.hardware.SensorManager::class.java))
         startBg()
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), 1)
@@ -605,6 +609,7 @@ class MainActivity : Activity() {
     override fun onPause() {
         wantOpen = false
         orientationListener.disable()
+        gyro.stop()
         closeCamera()
         stopBg()
         super.onPause()
@@ -1262,7 +1267,9 @@ class MainActivity : Activity() {
                         // RAW-Bild zum selben Zeitpunkt wie das YUV-Referenzbild
                         val refTs = yuvKeys[res.refIdx]
                         val rawRef = rawKeys.indices.minByOrNull { kotlin.math.abs(rawKeys[it] - refTs) } ?: 0
-                        val out = RawSR.run(raws, geo, rawParams(result), rawRef, res.refY, res.mergedY, 4) {
+                        val shake = shakeWeights(rawKeys, col.results)
+                        if (shake != null) srNote += " · ${shake.second}"
+                        val out = RawSR.run(raws, geo, rawParams(result), rawRef, res.refY, res.mergedY, 4, shake?.first) {
                             showStatus(it)
                         }
                         real = SuperRes.toBitmap(out.y, res.chroma, r, out.u, out.wo, out.ho)
@@ -1279,17 +1286,21 @@ class MainActivity : Activity() {
                 //    unschärfer, wird es vorher passend verkleinert – sonst hält die KI den
                 //    breiten Übergang für ein echtes Band und erzeugt einen Saum.
                 showStatus("Messe Unschärfe …")
-                val sigma = measureBlur(real)
-                val fBlur = BlurEstimate.aiScale(sigma)
+                val blur = measureBlur(real, col.rotation)
+                val fx = BlurEstimate.aiScale(blur.sx)
+                val fy = BlurEstimate.aiScale(blur.sy)
 
                 // 4. KI – Größe zusätzlich nach Zeitbudget begrenzen (schnell ≈ 45 s, stark ≈ 3 min)
                 val model = if (strongOn) AiUpscaler.getStrong(this) { showStatus(it) } else a
                 val budget = if (strongOn) 180_000L else 45_000L
                 val maxTiles = max(if (strongOn) 4L else 40L, budget / max(1L, model.msPerTile)).toInt()
-                var sc = min(fBlur, MAX_AI_INPUT.toFloat() / max(real.width, real.height))
-                while (sc > 0.1f && model.tilesFor((real.width * sc).toInt(), (real.height * sc).toInt()) > maxTiles) sc *= 0.9f
-                val input = if (sc < 0.999f)
-                    Bitmap.createScaledBitmap(real, max(16, (real.width * sc).roundToInt()), max(16, (real.height * sc).roundToInt()), true)
+                // je Richtung verkleinern (einseitige Verwacklung), dann gemeinsam nach Größe/Zeit begrenzen
+                var sc = min(1f, MAX_AI_INPUT.toFloat() / max(real.width * fx, real.height * fy))
+                while (sc > 0.1f && model.tilesFor((real.width * fx * sc).toInt(), (real.height * fy * sc).toInt()) > maxTiles) sc *= 0.9f
+                val iw = max(16, (real.width * fx * sc).roundToInt())
+                val ih = max(16, (real.height * fy * sc).roundToInt())
+                val input = if (iw != real.width || ih != real.height)
+                    Bitmap.createScaledBitmap(real, iw, ih, true)
                 else real
 
                 val t0 = SystemClock.elapsedRealtime()
@@ -1309,7 +1320,10 @@ class MainActivity : Activity() {
                 val kiBmp = if (kiRaw.width != kw || kiRaw.height != kh)
                     Bitmap.createScaledBitmap(kiRaw, kw, kh, true).also { if (it !== kiRaw) kiRaw.recycle() }
                 else kiRaw
-                srNote += " · Unschärfe ${fmt(sigma)} px"
+                srNote += if (kotlin.math.abs(blur.sx - blur.sy) > 0.25f * max(blur.sx, blur.sy))
+                    " · Unschärfe ${fmt(blur.sx)}/${fmt(blur.sy)} px"
+                else " · Unschärfe ${fmt(blur.mean)} px"
+                if (blur.fromText) srNote += " (Schrift)"
 
                 showStatus("Speichere …")
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
@@ -1360,21 +1374,108 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Unschärfe σ (in Pixeln dieses Bildes); große Bilder werden zum Messen halbiert. */
-    private fun measureBlur(b: Bitmap): Float {
+    /**
+     * Unschärfe je Richtung (in Pixeln dieses Bildes). Gefundene Schrift dient als Eichmaß:
+     * gedruckte Buchstaben haben echte Sprungkanten. Große Bilder werden zum Messen halbiert.
+     */
+    private fun measureBlur(b: Bitmap, rotation: Int): BlurEstimate.Result {
         val half = max(b.width, b.height) > 1400
         val src = if (half) Bitmap.createScaledBitmap(b, b.width / 2, b.height / 2, true) else b
         val w = src.width
         val h = src.height
         val px = IntArray(w * h)
         src.getPixels(px, 0, w, 0, 0, w, h)
+        val mask = try {
+            textMask(src, rotation)
+        } catch (_: Throwable) {
+            null
+        }
         if (src !== b) src.recycle()
         val y = FloatArray(w * h) { i ->
             val p = px[i]
             (((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f) / 255f
         }
-        val s = BlurEstimate.sigma(y, w, h)
-        return if (half) s * 2f else s
+        val r = BlurEstimate.measure(y, w, h, mask)
+        val k = if (half) 2f else 1f
+        return BlurEstimate.Result(r.sx * k, r.sy * k, r.edges, r.fromText)
+    }
+
+    /**
+     * Schrift im Bild finden (Texterkennung läuft auf dem Gerät). Das Bild wird dafür
+     * aufrecht gedreht; die gefundenen Bereiche werden zurück in Bildkoordinaten gerechnet.
+     */
+    private fun textMask(b: Bitmap, rotation: Int): BooleanArray? {
+        val w = b.width
+        val h = b.height
+        val upright = if (rotation == 0) b else
+            Bitmap.createBitmap(b, 0, 0, w, h, Matrix().apply { postRotate(rotation.toFloat()) }, true)
+        val rec = com.google.mlkit.vision.text.TextRecognition.getClient(
+            com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS,
+        )
+        val text = try {
+            com.google.android.gms.tasks.Tasks.await(
+                rec.process(com.google.mlkit.vision.common.InputImage.fromBitmap(upright, 0)),
+                8, java.util.concurrent.TimeUnit.SECONDS,
+            )
+        } finally {
+            rec.close()
+            if (upright !== b) upright.recycle()
+        }
+        val mask = BooleanArray(w * h)
+        var any = false
+        for (block in text.textBlocks) for (line in block.lines) for (el in line.elements) {
+            if (el.text.none { it.isLetterOrDigit() }) continue
+            val box = el.boundingBox ?: continue
+            // Ecken zurück in die ungedrehten Koordinaten
+            fun back(ux: Int, uy: Int): Pair<Int, Int> = when (rotation) {
+                90 -> uy to (h - 1 - ux)
+                180 -> (w - 1 - ux) to (h - 1 - uy)
+                270 -> (w - 1 - uy) to ux
+                else -> ux to uy
+            }
+            val c1 = back(box.left, box.top)
+            val c2 = back(box.right, box.bottom)
+            val pad = 4
+            val x0 = (min(c1.first, c2.first) - pad).coerceIn(0, w - 1)
+            val x1 = (max(c1.first, c2.first) + pad).coerceIn(0, w - 1)
+            val y0 = (min(c1.second, c2.second) - pad).coerceIn(0, h - 1)
+            val y1 = (max(c1.second, c2.second) + pad).coerceIn(0, h - 1)
+            for (yy in y0..y1) for (xx in x0..x1) mask[yy * w + xx] = true
+            any = true
+        }
+        return if (any) mask else null
+    }
+
+    /**
+     * Verwacklung je RAW-Bild aus dem Lagesensor: Drehgeschwindigkeit × Belichtungszeit ×
+     * Brennweite in Pixeln = Weg, den das Bild während der Belichtung über den Sensor wandert.
+     * Gibt Gewichte (ruhig = 1, verwackelt → klein) und eine kurze Notiz zurück.
+     */
+    private fun shakeWeights(keys: List<Long>, results: Map<Long, TotalCaptureResult>): Pair<FloatArray, String>? {
+        val c = chars ?: return null
+        if (c.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) !=
+            CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME) return null
+        val f = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: return null
+        val phys = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: return null
+        val pix = c.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE) ?: return null
+        val focalPx = f / (phys.width / pix.width)
+        if (keys.isEmpty()) return null
+        val blur = FloatArray(keys.size)
+        for (i in keys.indices) {
+            val ts = keys[i]
+            val exp = results[ts]?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 16_000_000L
+            val om = gyro.meanOmega(ts, ts + exp) ?: return null
+            blur[i] = om * (exp / 1e9f) * focalPx
+        }
+        val sorted = blur.sorted()
+        val med = sorted[sorted.size / 2]
+        var dropped = 0
+        val w = FloatArray(blur.size) { i ->
+            val b = blur[i]
+            if (b > med * 3f + 1f) { dropped++; 0f } else 1f / (1f + (b / 0.8f) * (b / 0.8f))
+        }
+        val note = if (dropped > 0) "$dropped verwackelte Bilder aussortiert" else "Verwacklung ⌀ ${fmt(med)} px"
+        return w to note
     }
 
     private fun cacheJpeg(b: Bitmap, name: String) {
