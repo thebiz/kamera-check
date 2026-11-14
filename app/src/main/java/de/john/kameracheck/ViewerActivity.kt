@@ -12,7 +12,6 @@ import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.SeekBar
 import android.widget.TextView
 import java.io.File
 import java.text.SimpleDateFormat
@@ -53,16 +52,11 @@ class ViewerActivity : Activity() {
         }
         panel.addView(mixLabel)
 
-        val seek = SeekBar(this).apply {
-            max = 100
-            progress = DEFAULT_MIX
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) = setMix(p / 100f)
-                override fun onStartTrackingTouch(s: SeekBar) {}
-                override fun onStopTrackingTouch(s: SeekBar) {}
-            })
+        val seek = BigSlider(this).apply {
+            setValue(DEFAULT_MIX / 100f)
+            onChange = { v -> setMix(v) }
         }
-        panel.addView(seek, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4f) })
+        panel.addView(seek, LinearLayout.LayoutParams(-1, -2))
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL

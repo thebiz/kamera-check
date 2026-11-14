@@ -45,7 +45,6 @@ import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.SeekBar
 import android.widget.TextView
 import java.io.File
 import java.nio.ByteOrder
@@ -65,7 +64,7 @@ class MainActivity : Activity() {
     private lateinit var texture: TextureView
     private lateinit var zoomLabel: TextView
     private lateinit var status: TextView
-    private lateinit var seek: SeekBar
+    private lateinit var seek: BigSlider
     private lateinit var shutter: ShutterView
     private lateinit var focusView: FocusView
     private lateinit var holdLabel: TextView
@@ -73,7 +72,7 @@ class MainActivity : Activity() {
     private lateinit var mfChip: TextView
     private lateinit var mfRow: LinearLayout
     private lateinit var mfLabel: TextView
-    private lateinit var mfSeek: SeekBar
+    private lateinit var mfSeek: BigSlider
     private lateinit var lupeChip: TextView
     private lateinit var lupeBox: FrameLayout
     private lateinit var lupeImage: ImageView
@@ -317,17 +316,10 @@ class MainActivity : Activity() {
         }
         panel.addView(zoomLabel)
 
-        seek = SeekBar(this).apply {
-            max = 1000
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
-                    if (fromUser) setZoom(Math.pow(maxZoom.toDouble(), p / 1000.0).toFloat(), fromSeek = true)
-                }
-                override fun onStartTrackingTouch(s: SeekBar) {}
-                override fun onStopTrackingTouch(s: SeekBar) {}
-            })
+        seek = BigSlider(this).apply {
+            onChange = { v -> setZoom(Math.pow(maxZoom.toDouble(), v.toDouble()).toFloat(), fromSeek = true) }
         }
-        panel.addView(seek, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4f) })
+        panel.addView(seek, LinearLayout.LayoutParams(-1, -2))
 
         val chips = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -338,7 +330,7 @@ class MainActivity : Activity() {
             presetChips += z to c
             chips.addView(c, chipParams())
         }
-        panel.addView(chips, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8f) })
+        panel.addView(chips, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(2f) })
 
         val chips2 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -353,9 +345,16 @@ class MainActivity : Activity() {
         chips2.addView(mfChip, chipParams())
         panel.addView(chips2, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8f) })
 
+        // Manueller Fokus: schwebt über der Vorschau, damit das Bedienfeld nicht zusammengedrückt wird
         mfRow = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
+            setPadding(dp(14f), dp(8f), dp(14f), dp(4f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(18f).toFloat()
+                setColor(0xCC000000.toInt())
+            }
+            isClickable = true
         }
         mfLabel = TextView(this).apply {
             setTextColor(FG)
@@ -368,20 +367,15 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         mfScale.addView(TextView(this).apply { text = "nah"; setTextColor(MUTED); textSize = 12f })
-        mfSeek = SeekBar(this).apply {
-            max = 1000
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
-                    if (fromUser) setManualFocus(p)
-                }
-                override fun onStartTrackingTouch(s: SeekBar) {}
-                override fun onStopTrackingTouch(s: SeekBar) {}
-            })
+        mfSeek = BigSlider(this).apply {
+            onChange = { v -> setManualFocus((v * 1000).roundToInt()) }
         }
         mfScale.addView(mfSeek, LinearLayout.LayoutParams(0, -2, 1f))
         mfScale.addView(TextView(this).apply { text = "∞"; setTextColor(MUTED); textSize = 14f })
         mfRow.addView(mfScale, LinearLayout.LayoutParams(-1, -2))
-        panel.addView(mfRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6f) })
+        previewBox.addView(mfRow, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply {
+            topMargin = dp(56f); leftMargin = dp(12f); rightMargin = dp(12f)
+        })
 
         // Auslöser-Zeile: Vorschaubild · Auslöser · Platzhalter
         val shotRow = LinearLayout(this).apply {
@@ -841,7 +835,7 @@ class MainActivity : Activity() {
             } else clearFocusPoint()
         }
         zoomLabel.text = "${fmt(zoom)}×"
-        if (!fromSeek) seek.progress = (ln(zoom) / ln(maxZoom) * 1000).roundToInt()
+        if (!fromSeek) seek.setValue(ln(zoom) / ln(maxZoom))
         updateChips()
         if (!busy) bg?.post { startPreview() }
     }
@@ -1042,8 +1036,8 @@ class MainActivity : Activity() {
         } else {
             mfRow.visibility = View.VISIBLE
             val t = kotlin.math.sqrt((focusDiopter / maxDiopter).coerceIn(0f, 1f))
-            mfSeek.progress = ((1f - t) * 1000).roundToInt()
-            setManualFocus(mfSeek.progress)
+            mfSeek.setValue(1f - t)
+            setManualFocus(((1f - t) * 1000).roundToInt())
         }
         updateChips()
     }
@@ -1281,27 +1275,41 @@ class MainActivity : Activity() {
                     raws.clear()
                 }
 
-                // 3. KI auf das Mehrbild – Größe nach Zeitbudget begrenzen (schnell ≈ 45 s, stark ≈ 3 min)
+                // 3. Unschärfe messen: Die KI kennt nur ≈ 1 Pixel Unschärfe. Ist das Bild
+                //    unschärfer, wird es vorher passend verkleinert – sonst hält die KI den
+                //    breiten Übergang für ein echtes Band und erzeugt einen Saum.
+                showStatus("Messe Unschärfe …")
+                val sigma = measureBlur(real)
+                val fBlur = BlurEstimate.aiScale(sigma)
+
+                // 4. KI – Größe zusätzlich nach Zeitbudget begrenzen (schnell ≈ 45 s, stark ≈ 3 min)
                 val model = if (strongOn) AiUpscaler.getStrong(this) { showStatus(it) } else a
                 val budget = if (strongOn) 180_000L else 45_000L
                 val maxTiles = max(if (strongOn) 4L else 40L, budget / max(1L, model.msPerTile)).toInt()
-                val longCap = if (half) 2400f else MAX_AI_INPUT.toFloat()
-                var sc = min(1f, longCap / max(real.width, real.height))
-                while (sc > 0.2f && model.tilesFor((real.width * sc).toInt(), (real.height * sc).toInt()) > maxTiles) sc *= 0.9f
+                var sc = min(fBlur, MAX_AI_INPUT.toFloat() / max(real.width, real.height))
+                while (sc > 0.1f && model.tilesFor((real.width * sc).toInt(), (real.height * sc).toInt()) > maxTiles) sc *= 0.9f
                 val input = if (sc < 0.999f)
-                    Bitmap.createScaledBitmap(real, (real.width * sc).roundToInt(), (real.height * sc).roundToInt(), true)
+                    Bitmap.createScaledBitmap(real, max(16, (real.width * sc).roundToInt()), max(16, (real.height * sc).roundToInt()), true)
                 else real
 
                 val t0 = SystemClock.elapsedRealtime()
                 val label = if (strongOn) "Starke KI" else "KI"
-                val kiBmp = model.upscale(input, half) { done, total ->
+                val kiRaw = model.upscale(input, false) { done, total ->
                     val left = (total - done) * model.msPerTile / 1000
                     showStatus("$label rekonstruiert … ${done * 100 / total} %" + if (left >= 10) " · noch ca. $left s" else "")
                 }
                 if (input !== real) input.recycle()
                 val secs = (SystemClock.elapsedRealtime() - t0) / 100 / 10f
-                val kw = kiBmp.width
-                val kh = kiBmp.height
+
+                // Zielgröße: Mehrbild ×2 (RAW) bzw. Einzelbild ×4, lange Seite höchstens 4096 px
+                val mult = if (half) 2f else 4f
+                val fit = min(1f, 4096f / (max(real.width, real.height) * mult))
+                val kw = max(1, (real.width * mult * fit).roundToInt())
+                val kh = max(1, (real.height * mult * fit).roundToInt())
+                val kiBmp = if (kiRaw.width != kw || kiRaw.height != kh)
+                    Bitmap.createScaledBitmap(kiRaw, kw, kh, true).also { if (it !== kiRaw) kiRaw.recycle() }
+                else kiRaw
+                srNote += " · Unschärfe ${fmt(sigma)} px"
 
                 showStatus("Speichere …")
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
@@ -1350,6 +1358,23 @@ class MainActivity : Activity() {
                 status.postDelayed({ if (!busy) showStatus(null) }, 5000)
             }
         }
+    }
+
+    /** Unschärfe σ (in Pixeln dieses Bildes); große Bilder werden zum Messen halbiert. */
+    private fun measureBlur(b: Bitmap): Float {
+        val half = max(b.width, b.height) > 1400
+        val src = if (half) Bitmap.createScaledBitmap(b, b.width / 2, b.height / 2, true) else b
+        val w = src.width
+        val h = src.height
+        val px = IntArray(w * h)
+        src.getPixels(px, 0, w, 0, 0, w, h)
+        if (src !== b) src.recycle()
+        val y = FloatArray(w * h) { i ->
+            val p = px[i]
+            (((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f) / 255f
+        }
+        val s = BlurEstimate.sigma(y, w, h)
+        return if (half) s * 2f else s
     }
 
     private fun cacheJpeg(b: Bitmap, name: String) {
