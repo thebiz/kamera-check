@@ -15,14 +15,18 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * KI-Hochskalierung ×4 mit Real-ESRGAN (realesr-general-x4v3).
- * Das Modell rechnet nur die Faltungen; Pixel-Shuffle und Basis-Addition passieren hier.
+ * KI-Hochskalierung ×4 mit Real-ESRGAN.
+ * - schnell: realesr-general-x4v3 (kompakt) – Modell rechnet nur Faltungen,
+ *   Pixel-Shuffle und Basis-Addition passieren hier
+ * - stark: RealESRGAN_x4plus (RRDB, ca. 12× Rechenaufwand) – Ausgabe direkt als Bild
  */
 class AiUpscaler private constructor(
     private val env: OrtEnvironment,
     private val session: OrtSession,
     val backend: String,
     val msPerTile: Long,
+    /** true = Modell liefert das fertige Bild (stark), false = Pixel-Shuffle + Basis (schnell) */
+    private val direct: Boolean,
 ) {
     companion object {
         const val T = 128
@@ -31,6 +35,7 @@ class AiUpscaler private constructor(
         private const val ST = T - 2 * OV
 
         @Volatile private var instance: AiUpscaler? = null
+        @Volatile private var strong: AiUpscaler? = null
 
         fun get(ctx: Context): AiUpscaler {
             instance?.let { return it }
@@ -38,6 +43,62 @@ class AiUpscaler private constructor(
                 instance?.let { return it }
                 return create(ctx.applicationContext).also { instance = it }
             }
+        }
+
+        /** Großes Modell. Beim ersten Mal wird der schnellste Rechenweg gemessen und gemerkt. */
+        fun getStrong(ctx: Context, progress: (String) -> Unit): AiUpscaler {
+            strong?.let { return it }
+            synchronized(this) {
+                strong?.let { return it }
+                return createStrong(ctx.applicationContext, progress).also { strong = it }
+            }
+        }
+
+        private fun cpuOptions() = OrtSession.SessionOptions().apply {
+            setIntraOpNumThreads(max(2, min(6, Runtime.getRuntime().availableProcessors() - 2)))
+            setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+        }
+
+        private fun npuOptions() = OrtSession.SessionOptions().apply {
+            addNnapi(EnumSet.of(NNAPIFlags.USE_FP16, NNAPIFlags.CPU_DISABLED))
+        }
+
+        private fun createStrong(ctx: Context, progress: (String) -> Unit): AiUpscaler {
+            val env = OrtEnvironment.getEnvironment()
+            val bytes = ctx.assets.open("sr_strong.onnx").use { it.readBytes() }
+            val prefs = ctx.getSharedPreferences("ki", Context.MODE_PRIVATE)
+            val known = prefs.getString("strong_backend", null)
+            val knownMs = prefs.getLong("strong_ms", 0L)
+            if (known != null && knownMs > 0) {
+                progress("Starke KI wird geladen …")
+                val s = env.createSession(bytes, if (known == "KI-Chip") npuOptions() else cpuOptions())
+                return AiUpscaler(env, s, known, knownMs, true)
+            }
+            // Erstes Mal: beide Wege messen (dauert etwas)
+            val test = testTile()
+            progress("Starke KI: messe Prozessor …")
+            val cpuSession = env.createSession(bytes, cpuOptions())
+            var t0 = System.nanoTime()
+            val cpuOut = run(env, cpuSession, test)
+            val cpuMs = (System.nanoTime() - t0) / 1_000_000
+            var result = AiUpscaler(env, cpuSession, "Prozessor", cpuMs, true)
+            try {
+                progress("Starke KI: messe KI-Chip …")
+                val npuSession = env.createSession(bytes, npuOptions())
+                run(env, npuSession, test)
+                t0 = System.nanoTime()
+                val npuOut = run(env, npuSession, test)
+                val npuMs = (System.nanoTime() - t0) / 1_000_000
+                var diff = 0f
+                for (i in cpuOut.indices) diff = max(diff, abs(cpuOut[i] - npuOut[i]))
+                if (diff < 0.08f && npuMs < cpuMs) {
+                    cpuSession.close()
+                    result = AiUpscaler(env, npuSession, "KI-Chip", npuMs, true)
+                } else npuSession.close()
+            } catch (_: Throwable) {
+            }
+            prefs.edit().putString("strong_backend", result.backend).putLong("strong_ms", result.msPerTile).apply()
+            return result
         }
 
         private fun create(ctx: Context): AiUpscaler {
@@ -65,12 +126,12 @@ class AiUpscaler private constructor(
                 val npuMs = bench(env, npuSession, test)
                 if (diff < 0.08f && npuMs < cpuMs) {
                     cpuSession.close()
-                    return AiUpscaler(env, npuSession, "KI-Chip", npuMs)
+                    return AiUpscaler(env, npuSession, "KI-Chip", npuMs, false)
                 }
                 npuSession.close()
             } catch (_: Throwable) {
             }
-            return AiUpscaler(env, cpuSession, "Prozessor", cpuMs)
+            return AiUpscaler(env, cpuSession, "Prozessor", cpuMs, false)
         }
 
         private fun testTile() = FloatArray(3 * TT) { i ->
@@ -155,6 +216,34 @@ class AiUpscaler private constructor(
                 val ly = y - y0
                 for (x in vx0 until vx1) {
                     val idx = ly * T + (x - x0)
+                    if (direct) {
+                        // Ausgabe [3, 4T, 4T]: Pixel (ly*4+i, lx*4+j)
+                        val T4 = 4 * T
+                        val plane = T4 * T4
+                        val lx = x - x0
+                        if (!half) {
+                            for (i in 0 until 4) {
+                                val row = (y * 4 + i) * wf + x * 4
+                                val src = (ly * 4 + i) * T4 + lx * 4
+                                for (j in 0 until 4) {
+                                    val q = src + j
+                                    out[row + j] = (0xFF shl 24) or (to8(o[q]) shl 16) or (to8(o[plane + q]) shl 8) or to8(o[2 * plane + q])
+                                }
+                            }
+                        } else {
+                            for (i in 0 until 2) {
+                                val row = (y * 2 + i) * wf + x * 2
+                                for (j in 0 until 2) {
+                                    val q = (ly * 4 + 2 * i) * T4 + lx * 4 + 2 * j
+                                    val r = (o[q] + o[q + 1] + o[q + T4] + o[q + T4 + 1]) / 4f
+                                    val g = (o[plane + q] + o[plane + q + 1] + o[plane + q + T4] + o[plane + q + T4 + 1]) / 4f
+                                    val b = (o[2 * plane + q] + o[2 * plane + q + 1] + o[2 * plane + q + T4] + o[2 * plane + q + T4 + 1]) / 4f
+                                    out[row + j] = (0xFF shl 24) or (to8(r) shl 16) or (to8(g) shl 8) or to8(b)
+                                }
+                            }
+                        }
+                        continue
+                    }
                     val br = inBuf[idx]
                     val bgv = inBuf[TT + idx]
                     val bb = inBuf[2 * TT + idx]

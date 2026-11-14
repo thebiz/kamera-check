@@ -117,6 +117,8 @@ class MainActivity : Activity() {
     @Volatile private var ai: AiUpscaler? = null
     private val aiWorker = Executors.newSingleThreadExecutor()
     private var lupeOn = true
+    private var strongOn = false
+    private lateinit var strongChip: TextView
     @Volatile private var lupeBusy = false
 
     // ── Bildserie ──
@@ -165,6 +167,9 @@ class MainActivity : Activity() {
             }
         }
 
+        strongOn = getSharedPreferences("ki", MODE_PRIVATE).getBoolean("strong_on", false)
+        updateChips()
+
         // KI laden und schnellsten Rechenweg ermitteln
         showStatus("KI wird geladen …")
         aiWorker.execute {
@@ -177,6 +182,7 @@ class MainActivity : Activity() {
                 showStatus("KI nicht verfügbar: ${e.message}")
             }
         }
+        if (strongOn) preloadStrong()
     }
 
     override fun onDestroy() {
@@ -280,6 +286,17 @@ class MainActivity : Activity() {
         }
         previewBox.addView(info, FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.TOP).apply {
             topMargin = dp(12f); rightMargin = dp(12f)
+        })
+
+        // KI-Stärke: schnell (kleines Modell) oder stark (großes Modell, dauert länger)
+        strongChip = TextView(this).apply {
+            setTextColor(FG)
+            textSize = 13f
+            setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
+            setOnClickListener { toggleStrong() }
+        }
+        previewBox.addView(strongChip, FrameLayout.LayoutParams(-2, -2, Gravity.START or Gravity.TOP).apply {
+            topMargin = dp(12f); leftMargin = dp(12f)
         })
 
         root.addView(previewBox, LinearLayout.LayoutParams(screenW, screenW * 4 / 3))
@@ -496,7 +513,31 @@ class MainActivity : Activity() {
         c.setTextColor(if (sel) BG else FG)
     }
 
+    private fun toggleStrong() {
+        strongOn = !strongOn
+        getSharedPreferences("ki", MODE_PRIVATE).edit().putBoolean("strong_on", strongOn).apply()
+        updateChips()
+        if (strongOn) preloadStrong()
+    }
+
+    /** Großes Modell im Hintergrund laden (beim ersten Mal wird gemessen). */
+    private fun preloadStrong() {
+        aiWorker.execute {
+            try {
+                val m = AiUpscaler.getStrong(this) { showStatus(it) }
+                showStatus("Starke KI bereit · ${m.backend} · ${fmt(m.msPerTile / 1000f)} s je Kachel")
+                status.postDelayed({ if (!busy) showStatus(null) }, 3000)
+            } catch (e: Throwable) {
+                strongOn = false
+                runOnUiThread { updateChips() }
+                showStatus("Starke KI nicht verfügbar: ${e.message}")
+            }
+        }
+    }
+
     private fun updateChips() {
+        strongChip.text = if (strongOn) "KI: stark" else "KI: schnell"
+        styleChip(strongChip, strongOn)
         for ((z, c) in presetChips) styleChip(c, kotlin.math.abs(zoom - z) < 0.05f)
         styleChip(macroChip, macro)
         styleChip(mfChip, mfRow.visibility == View.VISIBLE)
@@ -1240,18 +1281,22 @@ class MainActivity : Activity() {
                     raws.clear()
                 }
 
-                // 3. KI auf das Mehrbild – Größe nach Zeitbudget (≈ 45 s) begrenzen
-                val maxTiles = max(40L, 45_000L / max(1L, a.msPerTile)).toInt()
+                // 3. KI auf das Mehrbild – Größe nach Zeitbudget begrenzen (schnell ≈ 45 s, stark ≈ 3 min)
+                val model = if (strongOn) AiUpscaler.getStrong(this) { showStatus(it) } else a
+                val budget = if (strongOn) 180_000L else 45_000L
+                val maxTiles = max(if (strongOn) 4L else 40L, budget / max(1L, model.msPerTile)).toInt()
                 val longCap = if (half) 2400f else MAX_AI_INPUT.toFloat()
                 var sc = min(1f, longCap / max(real.width, real.height))
-                while (sc > 0.3f && a.tilesFor((real.width * sc).toInt(), (real.height * sc).toInt()) > maxTiles) sc *= 0.9f
+                while (sc > 0.2f && model.tilesFor((real.width * sc).toInt(), (real.height * sc).toInt()) > maxTiles) sc *= 0.9f
                 val input = if (sc < 0.999f)
                     Bitmap.createScaledBitmap(real, (real.width * sc).roundToInt(), (real.height * sc).roundToInt(), true)
                 else real
 
                 val t0 = SystemClock.elapsedRealtime()
-                val kiBmp = a.upscale(input, half) { done, total ->
-                    showStatus("KI rekonstruiert … ${done * 100 / total} %")
+                val label = if (strongOn) "Starke KI" else "KI"
+                val kiBmp = model.upscale(input, half) { done, total ->
+                    val left = (total - done) * model.msPerTile / 1000
+                    showStatus("$label rekonstruiert … ${done * 100 / total} %" + if (left >= 10) " · noch ca. $left s" else "")
                 }
                 if (input !== real) input.recycle()
                 val secs = (SystemClock.elapsedRealtime() - t0) / 100 / 10f
@@ -1289,7 +1334,7 @@ class MainActivity : Activity() {
                 val small = Bitmap.createScaledBitmap(mix, dp(54f) * 2, dp(54f) * 2 * mix.height / mix.width, true)
                 mix.recycle()
 
-                showStatus("Fertig ✓  ${res.used} Bilder$srNote · KI ${fmt(secs)} s")
+                showStatus("Fertig ✓$srNote · ${if (strongOn) "starke " else ""}KI ${fmt(secs)} s")
                 runOnUiThread {
                     thumb.setImageBitmap(small)
                     thumb.visibility = View.VISIBLE
