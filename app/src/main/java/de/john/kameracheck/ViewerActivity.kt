@@ -50,6 +50,23 @@ class ViewerActivity : Activity() {
             setTextColor(FG)
             textSize = 15f
         }
+        // Was die App erkannt und gerechnet hat – bleibt stehen, antippen klappt auf/zu
+        val infoText = File(cacheDir, INFO).takeIf { it.exists() }?.readText().orEmpty()
+        if (infoText.isNotEmpty()) {
+            val info = TextView(this).apply {
+                setTextColor(MUTED)
+                textSize = 12f
+                setLineSpacing(0f, 1.2f)
+                text = infoText
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(0, 0, 0, dp(8f))
+                setOnClickListener {
+                    maxLines = if (maxLines == 2) 20 else 2
+                }
+            }
+            panel.addView(info)
+        }
         panel.addView(mixLabel)
 
         val seek = BigSlider(this).apply {
@@ -94,7 +111,7 @@ class ViewerActivity : Activity() {
         compare.mix = v
         val pct = (v * 100).roundToInt()
         mixLabel.text = when (pct) {
-            0 -> "KI-Anteil: 0 % · nur echte Details"
+            0 -> "KI-Anteil: 0 % · nur echt (Mehrbild, entschärft)"
             100 -> "KI-Anteil: 100 % · volle KI"
             else -> "KI-Anteil: $pct %"
         }
@@ -144,7 +161,8 @@ class ViewerActivity : Activity() {
         const val NORMAL = "letztes_normal.jpg"
         const val REAL = "letztes_mehrbild.jpg"
         const val KI = "letztes_ki.jpg"
-        const val DEFAULT_MIX = 60
+        const val DEFAULT_MIX = 30
+        const val INFO = "letztes_info.txt"
         private const val BG = 0xFF111111.toInt()
         private const val FG = 0xFFEDEDED.toInt()
         private const val MUTED = 0xFF8A8A8A.toInt()

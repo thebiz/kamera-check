@@ -114,6 +114,7 @@ class MainActivity : Activity() {
 
     // ── Lagesensor ──
     private val gyro = GyroLog()
+    @Volatile private var lastShakePx = 0f
 
     // ── KI ──
     @Volatile private var ai: AiUpscaler? = null
@@ -1261,6 +1262,10 @@ class MainActivity : Activity() {
                 var real: Bitmap = res.merged
                 var srNote = ""
                 var half = false
+                var gridU = 1f
+                lastShakePx = 0f
+                val info = ArrayList<String>()
+                info += "${fmt(col.zoomAtShot)}× Zoom"
                 if (raws != null && rawParamsBase != null) {
                     try {
                         val geo = RawSR.Geo(r.x0, r.y0, r.rw, r.rh, r.cx, r.cy, r.cw, r.ch)
@@ -1276,54 +1281,71 @@ class MainActivity : Activity() {
                         res.merged.recycle()
                         srNote = " · ${out.used} RAW-Bilder · ${fmt(out.u)}×"
                         half = true
+                        gridU = out.u
+                        info += "${out.used} RAW-Bilder verrechnet, Raster ${fmt(out.u)}× feiner"
+                        if (shake != null) info += "Lagesensor: ${shake.second}"
                     } catch (e: OutOfMemoryError) {
                         srNote = " · ohne RAW (Speicher)"
                     }
                     raws.clear()
                 }
 
-                // 3. Unschärfe messen: Die KI kennt nur ≈ 1 Pixel Unschärfe. Ist das Bild
-                //    unschärfer, wird es vorher passend verkleinert – sonst hält die KI den
-                //    breiten Übergang für ein echtes Band und erzeugt einen Saum.
-                showStatus("Messe Unschärfe …")
-                val blur = measureBlur(real, col.rotation)
-                val fx = BlurEstimate.aiScale(blur.sx)
-                val fy = BlurEstimate.aiScale(blur.sy)
+                if (!half) info += "${res.used} Bilder gemittelt (ohne RAW)"
 
-                // 4. KI – Größe zusätzlich nach Zeitbudget begrenzen (schnell ≈ 45 s, stark ≈ 3 min)
+                // 3. Unschärfe messen (Schrift als Eichmaß, je Richtung, je Bildbereich)
+                showStatus("Messe Unschärfe …")
+                val (blur, uniformity) = measureBlur(real, col.rotation)
+                info += uniformity
+
+                // 4. Kameramodell: physikalisches Minimum, Messung darauf eingrenzen
+                val phys = physicalMinimum(half)
+                val lo = phys.total * gridU
+                val hi = (phys.total + CameraModel.PLAUSIBLE_EXTRA_PX) * gridU
+                val sx = blur.sx.coerceIn(lo, hi)
+                val sy = blur.sy.coerceIn(lo, hi)
+                info += "Unschärfe gemessen ${fmt(blur.sx)}/${fmt(blur.sy)} px" +
+                    (if (blur.fromText) " (an Schrift)" else "") + " · Physik-Minimum ${fmt(lo)} px"
+                if (sx != blur.sx || sy != blur.sy) info += "→ physikalisch begrenzt auf ${fmt(sx)}/${fmt(sy)} px"
+
+                // 5. Physikalisch entschärfen (nichts erfinden, nur Gedämpftes zurückholen)
+                val tDec = SystemClock.elapsedRealtime()
+                val (sharp, decIters) = deblurBitmap(real, sx, sy, if (strongOn) 150 else 80, if (strongOn) 60_000L else 25_000L) { pct ->
+                    showStatus("Entschärfe … $pct %")
+                }
+                info += "Entschärft: $decIters Durchgänge (Richardson-Lucy mit Kantenschutz)"
+                if (sharp !== real) real.recycle()
+                val decSecs = (SystemClock.elapsedRealtime() - tDec) / 100 / 10f
+
+                // 6. KI auf das entschärfte Bild – nur noch sanft zugemischt (Standard 30 %)
                 val model = if (strongOn) AiUpscaler.getStrong(this) { showStatus(it) } else a
                 val budget = if (strongOn) 180_000L else 45_000L
                 val maxTiles = max(if (strongOn) 4L else 40L, budget / max(1L, model.msPerTile)).toInt()
-                // je Richtung verkleinern (einseitige Verwacklung), dann gemeinsam nach Größe/Zeit begrenzen
-                var sc = min(1f, MAX_AI_INPUT.toFloat() / max(real.width * fx, real.height * fy))
-                while (sc > 0.1f && model.tilesFor((real.width * fx * sc).toInt(), (real.height * fy * sc).toInt()) > maxTiles) sc *= 0.9f
-                val iw = max(16, (real.width * fx * sc).roundToInt())
-                val ih = max(16, (real.height * fy * sc).roundToInt())
-                val input = if (iw != real.width || ih != real.height)
-                    Bitmap.createScaledBitmap(real, iw, ih, true)
-                else real
+                val cap = if (half) 2048f else MAX_AI_INPUT.toFloat()
+                var sc = min(1f, cap / max(sharp.width, sharp.height))
+                while (sc > 0.1f && model.tilesFor((sharp.width * sc).toInt(), (sharp.height * sc).toInt()) > maxTiles) sc *= 0.9f
+                val iw = max(16, (sharp.width * sc).roundToInt())
+                val ih = max(16, (sharp.height * sc).roundToInt())
+                val input = if (iw != sharp.width || ih != sharp.height) Bitmap.createScaledBitmap(sharp, iw, ih, true) else sharp
 
                 val t0 = SystemClock.elapsedRealtime()
                 val label = if (strongOn) "Starke KI" else "KI"
-                val kiRaw = model.upscale(input, false) { done, total ->
+                val kiRaw = model.upscale(input, half) { done, total ->
                     val left = (total - done) * model.msPerTile / 1000
-                    showStatus("$label rekonstruiert … ${done * 100 / total} %" + if (left >= 10) " · noch ca. $left s" else "")
+                    showStatus("$label … ${done * 100 / total} %" + if (left >= 10) " · noch ca. $left s" else "")
                 }
-                if (input !== real) input.recycle()
+                if (input !== sharp) input.recycle()
                 val secs = (SystemClock.elapsedRealtime() - t0) / 100 / 10f
+                info += "KI ${if (strongOn) "stark" else "schnell"} (${model.backend}): ${fmt(secs)} s · Entschärfen ${fmt(decSecs)} s"
 
                 // Zielgröße: Mehrbild ×2 (RAW) bzw. Einzelbild ×4, lange Seite höchstens 4096 px
                 val mult = if (half) 2f else 4f
-                val fit = min(1f, 4096f / (max(real.width, real.height) * mult))
-                val kw = max(1, (real.width * mult * fit).roundToInt())
-                val kh = max(1, (real.height * mult * fit).roundToInt())
+                val fit = min(1f, 4096f / (max(sharp.width, sharp.height) * mult))
+                val kw = max(1, (sharp.width * mult * fit).roundToInt())
+                val kh = max(1, (sharp.height * mult * fit).roundToInt())
                 val kiBmp = if (kiRaw.width != kw || kiRaw.height != kh)
                     Bitmap.createScaledBitmap(kiRaw, kw, kh, true).also { if (it !== kiRaw) kiRaw.recycle() }
                 else kiRaw
-                srNote += if (kotlin.math.abs(blur.sx - blur.sy) > 0.25f * max(blur.sx, blur.sy))
-                    " · Unschärfe ${fmt(blur.sx)}/${fmt(blur.sy)} px"
-                else " · Unschärfe ${fmt(blur.mean)} px"
-                if (blur.fromText) srNote += " (Schrift)"
+                real = sharp
 
                 showStatus("Speichere …")
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
@@ -1335,7 +1357,7 @@ class MainActivity : Activity() {
                 if (n !== res.single) res.single.recycle()
                 n.recycle()
 
-                // Mehrbild
+                // Echt: Mehrbild, physikalisch entschärft
                 val sBmp = rotate(Bitmap.createScaledBitmap(real, kw, kh, true), col.rotation)
                 if (sBmp !== real) real.recycle()
                 cacheJpeg(sBmp, ViewerActivity.REAL)
@@ -1356,7 +1378,8 @@ class MainActivity : Activity() {
                 val small = Bitmap.createScaledBitmap(mix, dp(54f) * 2, dp(54f) * 2 * mix.height / mix.width, true)
                 mix.recycle()
 
-                showStatus("Fertig ✓$srNote · ${if (strongOn) "starke " else ""}KI ${fmt(secs)} s")
+                File(cacheDir, ViewerActivity.INFO).writeText(info.joinToString("\n"))
+                showStatus("Fertig ✓")
                 runOnUiThread {
                     thumb.setImageBitmap(small)
                     thumb.visibility = View.VISIBLE
@@ -1378,7 +1401,7 @@ class MainActivity : Activity() {
      * Unschärfe je Richtung (in Pixeln dieses Bildes). Gefundene Schrift dient als Eichmaß:
      * gedruckte Buchstaben haben echte Sprungkanten. Große Bilder werden zum Messen halbiert.
      */
-    private fun measureBlur(b: Bitmap, rotation: Int): BlurEstimate.Result {
+    private fun measureBlur(b: Bitmap, rotation: Int): Pair<BlurEstimate.Result, String> {
         val half = max(b.width, b.height) > 1400
         val src = if (half) Bitmap.createScaledBitmap(b, b.width / 2, b.height / 2, true) else b
         val w = src.width
@@ -1397,7 +1420,86 @@ class MainActivity : Activity() {
         }
         val r = BlurEstimate.measure(y, w, h, mask)
         val k = if (half) 2f else 1f
-        return BlurEstimate.Result(r.sx * k, r.sy * k, r.edges, r.fromText)
+
+        // Gleichmäßigkeit: Bei ebenem Motiv muss jeder Bereich gleich scharf sein.
+        val cols = 3
+        val rows = 2
+        val sig = Array(rows) { FloatArray(cols) { Float.NaN } }
+        for (ry in 0 until rows) for (rx in 0 until cols) {
+            val x0 = rx * w / cols
+            val x1 = (rx + 1) * w / cols
+            val y0 = ry * h / rows
+            val y1 = (ry + 1) * h / rows
+            val sw = x1 - x0
+            val sh = y1 - y0
+            val sub = FloatArray(sw * sh)
+            for (yy in 0 until sh) System.arraycopy(y, (y0 + yy) * w + x0, sub, yy * sw, sw)
+            val m = BlurEstimate.measure(sub, sw, sh)
+            if (m.edges >= 40) sig[ry][rx] = m.mean * k
+        }
+        val vals = sig.flatMap { it.toList() }.filter { !it.isNaN() }
+        val note = if (vals.size < 2) "Gleichmäßigkeit: zu wenige Kanten zum Prüfen" else {
+            val mn = vals.min()
+            val mx = vals.max()
+            if (mx <= mn * 1.5f + 0.3f) "Schärfe gleichmäßig ✓ (${fmt(mn)}–${fmt(mx)} px)" else {
+                var wr = 0
+                var wc = 0
+                for (ry in 0 until rows) for (rx in 0 until cols) if (sig[ry][rx] == mx) { wr = ry; wc = rx }
+                // Lage in aufrechter Ansicht benennen
+                val where = regionName(wc, wr, cols, rows, rotation)
+                "Schärfe ungleichmäßig: $where unschärfer (${fmt(mn)} bis ${fmt(mx)} px)"
+            }
+        }
+        return BlurEstimate.Result(r.sx * k, r.sy * k, r.edges, r.fromText) to note
+    }
+
+    /** Bereich (Spalte/Zeile im Sensorbild) als Lage im aufrecht gedrehten Foto benennen. */
+    private fun regionName(c: Int, r: Int, cols: Int, rows: Int, rotation: Int): String {
+        val nx = (c + 0.5f) / cols
+        val ny = (r + 0.5f) / rows
+        val (ux, uy) = when (rotation) {
+            90 -> (1 - ny) to nx
+            180 -> (1 - nx) to (1 - ny)
+            270 -> ny to (1 - nx)
+            else -> nx to ny
+        }
+        val v = if (uy < 0.4f) "oben" else if (uy > 0.6f) "unten" else ""
+        val hz = if (ux < 0.4f) "links" else if (ux > 0.6f) "rechts" else ""
+        return listOf(v, hz).filter { it.isNotEmpty() }.joinToString(" ").ifEmpty { "Mitte" }
+    }
+
+    /** Minimale Unschärfe laut Kameramodell (RAW-Pixel). */
+    private fun physicalMinimum(merged: Boolean): CameraModel.Breakdown {
+        val c = chars
+        val n = c?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)?.firstOrNull() ?: 1.6f
+        val phys = c?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+        val pix = c?.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+        val pitchUm = if (phys != null && pix != null) phys.width * 1000f / pix.width else 1.6f
+        return CameraModel.minimum(n, pitchUm, lastShakePx, merged)
+    }
+
+    /** Helligkeit entschärfen, Farbe beibehalten (Helligkeits-Unterschied wird auf R, G, B übertragen). */
+    private fun deblurBitmap(
+        b: Bitmap, sx: Float, sy: Float, iters: Int, budgetMs: Long, progress: (Int) -> Unit,
+    ): Pair<Bitmap, Int> {
+        val w = b.width
+        val h = b.height
+        val px = IntArray(w * h)
+        b.getPixels(px, 0, w, 0, 0, w, h)
+        val y = FloatArray(w * h) { i ->
+            val p = px[i]
+            (((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f) / 255f
+        }
+        val (yd, n) = Deconv.deconvolve(y, w, h, sx, sy, iters, 0.012f, 4, budgetMs) { pct -> progress(pct) }
+        for (i in px.indices) {
+            val d = (yd[i] - y[i]) * 255f
+            val p = px[i]
+            val r = (((p shr 16) and 255) + d).roundToInt().coerceIn(0, 255)
+            val g = (((p shr 8) and 255) + d).roundToInt().coerceIn(0, 255)
+            val bl = ((p and 255) + d).roundToInt().coerceIn(0, 255)
+            px[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or bl
+        }
+        return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888) to n
     }
 
     /**
@@ -1474,7 +1576,8 @@ class MainActivity : Activity() {
             val b = blur[i]
             if (b > med * 3f + 1f) { dropped++; 0f } else 1f / (1f + (b / 0.8f) * (b / 0.8f))
         }
-        val note = if (dropped > 0) "$dropped verwackelte Bilder aussortiert" else "Verwacklung ⌀ ${fmt(med)} px"
+        lastShakePx = med
+        val note = if (dropped > 0) "$dropped verwackelte Bilder aussortiert, Verwacklung ⌀ ${fmt(med)} px" else "Verwacklung ⌀ ${fmt(med)} px"
         return w to note
     }
 

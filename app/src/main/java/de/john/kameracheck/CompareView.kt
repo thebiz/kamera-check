@@ -132,8 +132,8 @@ class CompareView(ctx: Context) : View(ctx) {
         label(c, "Normal", 12f * d, true)
         val right = when {
             mix >= 0.995f -> "KI"
-            mix <= 0.005f -> "Mehrbild"
-            else -> "Mehrbild + KI ${(mix * 100).roundToInt()} %"
+            mix <= 0.005f -> "Echt"
+            else -> "Echt + KI ${(mix * 100).roundToInt()} %"
         }
         label(c, right, width - 12f * d, false)
     }
