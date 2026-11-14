@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.ImageFormat
 import android.graphics.Matrix
+import android.graphics.Outline
 import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.graphics.Typeface
@@ -28,6 +29,7 @@ import android.media.ImageReader
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Size
 import android.view.GestureDetector
@@ -38,7 +40,9 @@ import android.view.ScaleGestureDetector
 import android.view.Surface
 import android.view.TextureView
 import android.view.View
+import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
@@ -46,10 +50,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.pow
 import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
@@ -61,6 +65,10 @@ class MainActivity : Activity() {
     private lateinit var seek: SeekBar
     private lateinit var shutter: View
     private lateinit var macroChip: TextView
+    private lateinit var lupeChip: TextView
+    private lateinit var lupeBox: FrameLayout
+    private lateinit var lupeImage: ImageView
+    private lateinit var lupeLabel: TextView
     private val presetChips = mutableListOf<Pair<Float, TextView>>()
 
     // ── Kamera ──
@@ -74,6 +82,7 @@ class MainActivity : Activity() {
     private var previewSurface: Surface? = null
     private var previewSize = Size(1440, 1080)
     private var yuvSize = Size(4096, 3072)
+    private var wantOpen = false
 
     private var zoom = 1f
     private var maxZoom = 10f
@@ -84,6 +93,12 @@ class MainActivity : Activity() {
     private var sensorOrientation = 90
     private var deviceOrientation = 0
     private lateinit var orientationListener: OrientationEventListener
+
+    // ── KI ──
+    @Volatile private var ai: AiUpscaler? = null
+    private val aiWorker = Executors.newSingleThreadExecutor()
+    private var lupeOn = true
+    @Volatile private var lupeBusy = false
 
     // ── Bildserie ──
     @Volatile private var busy = false
@@ -107,6 +122,24 @@ class MainActivity : Activity() {
                 if (o != ORIENTATION_UNKNOWN) deviceOrientation = ((o + 45) / 90 * 90) % 360
             }
         }
+
+        // KI laden und schnellsten Rechenweg ermitteln
+        showStatus("KI wird geladen …")
+        aiWorker.execute {
+            try {
+                val a = AiUpscaler.get(this)
+                ai = a
+                showStatus("KI bereit · ${a.backend} · ${a.msPerTile} ms")
+                status.postDelayed({ if (!busy) showStatus(null) }, 2500)
+            } catch (e: Throwable) {
+                showStatus("KI nicht verfügbar: ${e.message}")
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        aiWorker.shutdown()
+        super.onDestroy()
     }
 
     private fun dp(v: Float) = (v * resources.displayMetrics.density).roundToInt()
@@ -124,6 +157,40 @@ class MainActivity : Activity() {
         val previewBox = FrameLayout(this)
         texture = TextureView(this)
         previewBox.addView(texture, FrameLayout.LayoutParams(-1, -1))
+
+        // KI-Lupe: Mitte des Bildes, von der KI ×4 rekonstruiert
+        lupeImage = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_XY }
+        lupeLabel = TextView(this).apply {
+            text = "KI ×4"
+            setTextColor(FG)
+            textSize = 11f
+            setPadding(dp(8f), dp(3f), dp(8f), dp(3f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10f).toFloat()
+                setColor(0xAA000000.toInt())
+            }
+        }
+        val radius = dp(18f).toFloat()
+        lupeBox = FrameLayout(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = radius
+                setColor(0xFF000000.toInt())
+                setStroke(dp(2f), FG)
+            }
+            outlineProvider = object : ViewOutlineProvider() {
+                override fun getOutline(v: View, o: Outline) = o.setRoundRect(0, 0, v.width, v.height, radius)
+            }
+            clipToOutline = true
+            addView(lupeImage, FrameLayout.LayoutParams(-1, -1).apply {
+                setMargins(dp(2f), dp(2f), dp(2f), dp(2f))
+            })
+            addView(lupeLabel, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START).apply {
+                topMargin = dp(8f); leftMargin = dp(8f)
+            })
+            visibility = View.GONE
+        }
+        val lupeSize = min(512, (screenW * 0.62f).roundToInt())
+        previewBox.addView(lupeBox, FrameLayout.LayoutParams(lupeSize, lupeSize, Gravity.CENTER))
 
         status = TextView(this).apply {
             setTextColor(FG)
@@ -158,7 +225,7 @@ class MainActivity : Activity() {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(20f), dp(14f), dp(20f), dp(14f))
+            setPadding(dp(20f), dp(12f), dp(20f), dp(12f))
         }
 
         zoomLabel = TextView(this).apply {
@@ -174,13 +241,13 @@ class MainActivity : Activity() {
             max = 1000
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
-                    if (fromUser) setZoom(10f.pow(p / 1000f * log10(maxZoom)), fromSeek = true)
+                    if (fromUser) setZoom(Math.pow(maxZoom.toDouble(), p / 1000.0).toFloat(), fromSeek = true)
                 }
                 override fun onStartTrackingTouch(s: SeekBar) {}
                 override fun onStopTrackingTouch(s: SeekBar) {}
             })
         }
-        panel.addView(seek, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6f) })
+        panel.addView(seek, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(4f) })
 
         val chips = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -191,16 +258,24 @@ class MainActivity : Activity() {
             presetChips += z to c
             chips.addView(c, chipParams())
         }
+        panel.addView(chips, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8f) })
+
+        val chips2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        lupeChip = chip("KI-Lupe") { toggleLupe() }
+        chips2.addView(lupeChip, chipParams())
         macroChip = chip("Makro") { toggleMacro() }
         macroChip.visibility = View.GONE
-        chips.addView(macroChip, chipParams())
-        panel.addView(chips, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10f) })
+        chips2.addView(macroChip, chipParams())
+        panel.addView(chips2, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8f) })
 
         shutter = View(this).apply {
             background = shutterBg()
             setOnClickListener { shoot() }
         }
-        panel.addView(shutter, LinearLayout.LayoutParams(dp(76f), dp(76f)).apply { topMargin = dp(18f) })
+        panel.addView(shutter, LinearLayout.LayoutParams(dp(74f), dp(74f)).apply { topMargin = dp(14f) })
 
         val hint = TextView(this).apply {
             text = "Tippen: Fokus · Doppeltippen: Autofokus · Zwei Finger: Zoom"
@@ -208,10 +283,19 @@ class MainActivity : Activity() {
             textSize = 12f
             gravity = Gravity.CENTER
         }
-        panel.addView(hint, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(12f) })
+        panel.addView(hint, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10f) })
 
         root.addView(panel, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
+
+        texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(s: SurfaceTexture, w: Int, h: Int) {
+                if (wantOpen) bg?.post { openCamera() }
+            }
+            override fun onSurfaceTextureSizeChanged(s: SurfaceTexture, w: Int, h: Int) {}
+            override fun onSurfaceTextureDestroyed(s: SurfaceTexture) = true
+            override fun onSurfaceTextureUpdated(s: SurfaceTexture) = feedLupe()
+        }
 
         // Gesten auf der Vorschau
         val scale = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -237,8 +321,6 @@ class MainActivity : Activity() {
         }
         updateChips()
     }
-
-    private fun log10(v: Float) = (ln(v) / ln(10f))
 
     private fun chipBg(selected: Boolean) = GradientDrawable().apply {
         cornerRadius = dp(16f).toFloat()
@@ -275,23 +357,62 @@ class MainActivity : Activity() {
         return LayerDrawable(arrayOf(ring, InsetDrawable(dot, dp(9f))))
     }
 
-    private fun updateChips() {
-        for ((z, c) in presetChips) {
-            val sel = abs(zoom - z) < 0.05f
-            c.background = chipBg(sel)
-            c.setTextColor(if (sel) BG else FG)
-        }
-        macroChip.background = chipBg(macro)
-        macroChip.setTextColor(if (macro) BG else FG)
+    private fun styleChip(c: TextView, sel: Boolean) {
+        c.background = chipBg(sel)
+        c.setTextColor(if (sel) BG else FG)
     }
 
-    private fun abs(v: Float) = kotlin.math.abs(v)
+    private fun updateChips() {
+        for ((z, c) in presetChips) styleChip(c, kotlin.math.abs(zoom - z) < 0.05f)
+        styleChip(macroChip, macro)
+        styleChip(lupeChip, lupeOn)
+    }
 
     private fun showStatus(text: String?) = runOnUiThread {
         if (text == null) status.visibility = View.GONE
         else {
             status.text = text
             status.visibility = View.VISIBLE
+        }
+    }
+
+    // ───────────────────────── KI-Lupe ─────────────────────────
+
+    private fun toggleLupe() {
+        lupeOn = !lupeOn
+        if (!lupeOn) lupeBox.visibility = View.GONE
+        updateChips()
+    }
+
+    /** Wird bei jedem Vorschaubild aufgerufen; schickt die Bildmitte an die KI, sobald sie frei ist. */
+    private fun feedLupe() {
+        val a = ai ?: return
+        if (!lupeOn || lupeBusy || busy || device == null) return
+        val tw = texture.width
+        val th = texture.height
+        if (tw < AiUpscaler.T || th < AiUpscaler.T) return
+        lupeBusy = true
+        val full = texture.bitmap ?: run { lupeBusy = false; return }
+        val crop = Bitmap.createBitmap(
+            full, (tw - AiUpscaler.T) / 2, (th - AiUpscaler.T) / 2, AiUpscaler.T, AiUpscaler.T,
+        )
+        full.recycle()
+        aiWorker.execute {
+            try {
+                val t0 = SystemClock.elapsedRealtime()
+                val out = a.upscale(crop)
+                val ms = SystemClock.elapsedRealtime() - t0
+                runOnUiThread {
+                    if (lupeOn && !busy) {
+                        lupeImage.setImageBitmap(out)
+                        lupeLabel.text = "KI ×4 · ${a.backend} · $ms ms"
+                        lupeBox.visibility = View.VISIBLE
+                    }
+                    lupeBusy = false
+                }
+            } catch (_: Throwable) {
+                lupeBusy = false
+            }
         }
     }
 
@@ -309,6 +430,7 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        wantOpen = false
         orientationListener.disable()
         closeCamera()
         stopBg()
@@ -321,13 +443,8 @@ class MainActivity : Activity() {
     }
 
     private fun startWhenReady() {
-        if (texture.isAvailable) openCamera()
-        else texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(s: SurfaceTexture, w: Int, h: Int) = openCamera()
-            override fun onSurfaceTextureSizeChanged(s: SurfaceTexture, w: Int, h: Int) {}
-            override fun onSurfaceTextureDestroyed(s: SurfaceTexture) = true
-            override fun onSurfaceTextureUpdated(s: SurfaceTexture) {}
-        }
+        wantOpen = true
+        if (texture.isAvailable) bg?.post { openCamera() }
     }
 
     private fun startBg() {
@@ -346,7 +463,7 @@ class MainActivity : Activity() {
 
     @SuppressLint("MissingPermission")
     private fun openCamera() {
-        if (device != null) return
+        if (device != null || !wantOpen) return
         val handler = bg ?: return
         val cm = getSystemService(CameraManager::class.java)
         val c = cm.getCameraCharacteristics(camId)
@@ -491,7 +608,7 @@ class MainActivity : Activity() {
         afMode = if (macro) CaptureRequest.CONTROL_AF_MODE_MACRO else CaptureRequest.CONTROL_AF_MODE_AUTO
         triggerAf()
         showStatus(if (macro) "Makro-Fokus" else "Fokus fixiert")
-        bg?.postDelayed({ if (!busy) showStatus(null) }, 1200)
+        status.postDelayed({ if (!busy) showStatus(null) }, 1200)
     }
 
     private fun resetFocus() {
@@ -501,7 +618,7 @@ class MainActivity : Activity() {
         updateChips()
         bg?.post { startPreview() }
         showStatus("Autofokus")
-        bg?.postDelayed({ if (!busy) showStatus(null) }, 1000)
+        status.postDelayed({ if (!busy) showStatus(null) }, 1000)
     }
 
     private fun toggleMacro() {
@@ -536,11 +653,16 @@ class MainActivity : Activity() {
         if (busy) return
         val s = session ?: return
         val handler = bg ?: return
+        if (ai == null) {
+            showStatus("KI lädt noch – einen Moment")
+            return
+        }
         busy = true
         shutter.alpha = 0.4f
+        lupeBox.visibility = View.GONE
 
         val z = zoom
-        val count = if (z >= 2f) 12 else 8
+        val count = if (z >= 2f) 10 else 6
         val rotation = (sensorOrientation + deviceOrientation) % 360
         val col = Collector(Region.compute(yuvSize.width, yuvSize.height, z), count, z, rotation)
         collecting = col
@@ -551,7 +673,7 @@ class MainActivity : Activity() {
                 s.stopRepeating()
                 val b = baseRequest(CameraDevice.TEMPLATE_PREVIEW)
                 b.addTarget(reader!!.surface)
-                // Ganzes Sensorbild holen, Ausschnitt rechnen wir selbst
+                // Ganzes Sensorbild holen, den Ausschnitt rechnen wir selbst
                 b.set(CaptureRequest.CONTROL_ZOOM_RATIO, 1f)
                 b.set(CaptureRequest.CONTROL_AE_LOCK, true)
                 b.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
@@ -562,7 +684,6 @@ class MainActivity : Activity() {
                 failShot("Aufnahme fehlgeschlagen")
                 return@post
             }
-            // Falls Bilder verloren gehen: nach 4 s mit dem weitermachen, was da ist
             handler.postDelayed({
                 if (collecting === col && !col.done) {
                     if (col.frames.size >= 3) finishBurst(col) else failShot("Zu wenige Bilder bekommen")
@@ -577,7 +698,7 @@ class MainActivity : Activity() {
         startPreview()
         runOnUiThread { shutter.alpha = 1f }
         showStatus(msg)
-        bg?.postDelayed({ showStatus(null) }, 2500)
+        status.postDelayed({ showStatus(null) }, 2500)
     }
 
     private fun finishBurst(col: Collector) {
@@ -585,25 +706,49 @@ class MainActivity : Activity() {
         collecting = null
         startPreview()
         val frames = col.frames
-        Thread {
+        val a = ai!!
+        aiWorker.execute {
             try {
-                val res = SuperRes.process(frames, col.region, col.zoomAtShot) { showStatus(it) }
+                // 1. Bildserie ausrichten und mitteln
+                val res = SuperRes.process(frames, col.region) { showStatus(it) }
+
+                // 2. KI-Eingang begrenzen (lange Seite max. 1024 px → Ergebnis max. 4096 px)
+                val m = res.merged
+                val long = max(m.width, m.height)
+                val input = if (long > MAX_AI_INPUT) {
+                    val f = MAX_AI_INPUT.toFloat() / long
+                    Bitmap.createScaledBitmap(m, (m.width * f).roundToInt(), (m.height * f).roundToInt(), true)
+                        .also { m.recycle() }
+                } else m
+
+                // 3. KI ×4
+                val t0 = SystemClock.elapsedRealtime()
+                val kiBmp = a.upscale(input) { done, total ->
+                    showStatus("KI rekonstruiert … ${done * 100 / total} %")
+                }
+                input.recycle()
+                val secs = (SystemClock.elapsedRealtime() - t0) / 100 / 10f
+
+                // 4. Vergleichsbild: normales Digitalzoom-Einzelbild in gleicher Größe
+                val normal = Bitmap.createScaledBitmap(res.single, kiBmp.width, kiBmp.height, true)
+                if (normal !== res.single) res.single.recycle()
+
                 showStatus("Speichere …")
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
                 val tag = "${fmt(col.zoomAtShot).replace(',', '-')}x"
-                save(rotate(res.single, col.rotation), "zoom_${stamp}_${tag}_1-einzel")
-                save(rotate(res.merged, col.rotation), "zoom_${stamp}_${tag}_2-mehrbild")
-                showStatus("Gespeichert ✓  ${res.used} von ${res.total} Bildern verrechnet")
+                save(rotate(normal, col.rotation), "zoom_${stamp}_${tag}_1-normal")
+                save(rotate(kiBmp, col.rotation), "zoom_${stamp}_${tag}_2-KI")
+                showStatus("Gespeichert ✓  ${res.used} Bilder · KI ${fmt(secs)} s")
             } catch (e: OutOfMemoryError) {
                 showStatus("Zu wenig Speicher – etwas mehr zoomen")
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 showStatus("Fehler: ${e.message}")
             } finally {
                 busy = false
                 runOnUiThread { shutter.alpha = 1f }
-                status.postDelayed({ if (!busy) showStatus(null) }, 3500)
+                status.postDelayed({ if (!busy) showStatus(null) }, 4000)
             }
-        }.start()
+        }
     }
 
     private fun rotate(b: Bitmap, deg: Int): Bitmap {
@@ -633,5 +778,6 @@ class MainActivity : Activity() {
         private const val BG = 0xFF111111.toInt()
         private const val FG = 0xFFEDEDED.toInt()
         private const val MUTED = 0xFF8A8A8A.toInt()
+        private const val MAX_AI_INPUT = 1024
     }
 }

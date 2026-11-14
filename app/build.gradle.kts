@@ -11,8 +11,12 @@ android {
         applicationId = "de.john.kameracheck"
         minSdk = 30
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2"
+        versionCode = 3
+        versionName = "0.3"
+
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     // Fester Schlüssel im Repo, damit Updates sich drüberinstallieren lassen
@@ -39,4 +43,8 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+}
+
+dependencies {
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
 }

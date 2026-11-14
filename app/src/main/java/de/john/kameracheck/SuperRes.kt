@@ -3,7 +3,6 @@ package de.john.kameracheck
 import android.graphics.Bitmap
 import android.media.Image
 import kotlin.math.abs
-import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.max
@@ -85,10 +84,14 @@ object SuperRes {
     /** Robustheit: Pixel, die stark vom Referenzbild abweichen (Bewegung), zählen weniger. */
     private val ROBUST = FloatArray(256) { d -> exp(-(d / 35f) * (d / 35f)) }
 
+    /**
+     * Richtet die Bildserie aus und mittelt sie (rauschärmer, ohne Nachschärfen –
+     * das übernimmt danach die KI). Liefert Mittelwert und Referenz-Einzelbild
+     * in Ausschnittsgröße.
+     */
     fun process(
         frames: MutableList<Frame?>,
         r: Region,
-        zoom: Float,
         progress: (String) -> Unit,
     ): Result {
         val w = r.rw
@@ -102,7 +105,6 @@ object SuperRes {
         val ref = frames[refIdx]!!
         val refSmall = downscale4(ref.y, w, h)
 
-        // Verschiebung jedes Bildes gegenüber der Referenz bestimmen
         val shifts = ArrayList<FloatArray>()
         var n = 0
         for (i in 0 until total) {
@@ -116,10 +118,9 @@ object SuperRes {
         val median = if (costs.isEmpty()) 0f else costs[costs.size / 2]
         val good = shifts.filter { it[2] <= median * 1.6f + 1f }
 
-        // Auf feineres Raster verteilen
-        val u = if (zoom >= 2f) 2 else 1
-        val wo = r.cw * u
-        val ho = r.ch * u
+        val u = 1
+        val wo = r.cw
+        val ho = r.ch
         val acc = FloatArray(wo * ho)
         val wt = FloatArray(wo * ho)
 
@@ -129,16 +130,15 @@ object SuperRes {
             progress("Verrechne ${k + 2}/${good.size + 1} …")
             val idx = s[3].toInt()
             splat(frames[idx]!!.y, s[0], s[1], ref.y, r, u, acc, wt, wo, ho)
-            frames[idx] = null // Speicher freigeben
+            frames[idx] = null
         }
 
-        // Ergebnis-Helligkeit in acc, Einzelbild-Helligkeit in wt
         progress("Setze zusammen …")
         val prior = 0.02f
         for (oy in 0 until ho) {
-            val ly = (r.cy + (oy + 0.5f) / u - 0.5f) - r.y0
+            val ly = (r.cy + oy) - r.y0.toFloat()
             for (ox in 0 until wo) {
-                val lx = (r.cx + (ox + 0.5f) / u - 0.5f) - r.x0
+                val lx = (r.cx + ox) - r.x0.toFloat()
                 val refv = bilinear(ref.y, w, h, lx, ly)
                 val k = oy * wo + ox
                 acc[k] = (acc[k] + prior * refv) / (wt[k] + prior)
@@ -146,19 +146,10 @@ object SuperRes {
             }
         }
 
-        progress("Schärfe nach …")
-        val tmp = FloatArray(wo * ho)
-        val sigma = if (u == 2) 1.4f else 1.0f
-        val amount = if (u == 2) 0.8f else 0.5f
-        sharpen(acc, tmp, wo, ho, sigma, amount)
-        sharpen(wt, tmp, wo, ho, sigma, amount)
-
-        progress("Erzeuge Bilder …")
         val px = IntArray(wo * ho)
         val merged = toBitmap(acc, ref, r, u, wo, ho, px)
         val single = toBitmap(wt, ref, r, u, wo, ho, px)
-
-        return Result(upscale(merged), upscale(single), good.size + 1, total)
+        return Result(merged, single, good.size + 1, total)
     }
 
     private fun sharpness(y: ByteArray, w: Int, h: Int): Float {
@@ -362,37 +353,6 @@ object SuperRes {
         return (p00 * (1 - ax) + p10 * ax) * (1 - ay) + (p01 * (1 - ax) + p11 * ax) * ay
     }
 
-    /** Unscharf maskieren, in-place. */
-    private fun sharpen(img: FloatArray, tmp: FloatArray, w: Int, h: Int, sigma: Float, amount: Float) {
-        val rad = ceil(3 * sigma).toInt()
-        val k = FloatArray(2 * rad + 1) { i -> val d = (i - rad).toFloat(); exp(-d * d / (2 * sigma * sigma)) }
-        val sum = k.sum()
-        for (i in k.indices) k[i] /= sum
-
-        for (y in 0 until h) {
-            val row = y * w
-            for (x in 0 until w) {
-                var s = 0f
-                for (t in -rad..rad) {
-                    val xx = (x + t).coerceIn(0, w - 1)
-                    s += img[row + xx] * k[t + rad]
-                }
-                tmp[row + x] = s
-            }
-        }
-        for (y in 0 until h) {
-            for (x in 0 until w) {
-                var s = 0f
-                for (t in -rad..rad) {
-                    val yy = (y + t).coerceIn(0, h - 1)
-                    s += tmp[yy * w + x] * k[t + rad]
-                }
-                val i = y * w + x
-                img[i] = img[i] + amount * (img[i] - s)
-            }
-        }
-    }
-
     private fun toBitmap(yv: FloatArray, ref: Frame, r: Region, u: Int, wo: Int, ho: Int, px: IntArray): Bitmap {
         val cw = r.rw / 2
         val ch = r.rh / 2
@@ -432,14 +392,4 @@ object SuperRes {
     }
 
     private fun clamp(v: Float): Int = v.roundToInt().coerceIn(0, 255)
-
-    /** Kleine Ergebnisse auf mindestens 2400 px lange Seite bringen. */
-    private fun upscale(b: Bitmap): Bitmap {
-        val long = max(b.width, b.height)
-        if (long >= 2400) return b
-        val f = 2400f / long
-        val s = Bitmap.createScaledBitmap(b, (b.width * f).roundToInt(), (b.height * f).roundToInt(), true)
-        if (s !== b) b.recycle()
-        return s
-    }
 }
