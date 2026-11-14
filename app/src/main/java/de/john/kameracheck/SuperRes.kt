@@ -124,14 +124,32 @@ object SuperRes {
         val acc = FloatArray(wo * ho)
         val wt = FloatArray(wo * ho)
 
+        // Farbe (halbe Auflösung) ebenfalls über alle Bilder mitteln
+        val cwh = w / 2
+        val chh = h / 2
+        val uAcc = FloatArray(cwh * chh)
+        val vAcc = FloatArray(cwh * chh)
+        val cWt = FloatArray(cwh * chh)
+
         progress("Verrechne 1/${good.size + 1} …")
         splat(ref.y, 0f, 0f, ref.y, r, u, acc, wt, wo, ho)
+        addChroma(ref, 0f, 0f, cwh, chh, uAcc, vAcc, cWt)
         good.forEachIndexed { k, s ->
             progress("Verrechne ${k + 2}/${good.size + 1} …")
             val idx = s[3].toInt()
-            splat(frames[idx]!!.y, s[0], s[1], ref.y, r, u, acc, wt, wo, ho)
+            val f = frames[idx]!!
+            splat(f.y, s[0], s[1], ref.y, r, u, acc, wt, wo, ho)
+            addChroma(f, s[0], s[1], cwh, chh, uAcc, vAcc, cWt)
             frames[idx] = null
         }
+        val uAvg = ByteArray(cwh * chh)
+        val vAvg = ByteArray(cwh * chh)
+        for (i in uAvg.indices) {
+            val wgt = cWt[i]
+            uAvg[i] = (if (wgt > 0f) (uAcc[i] / wgt).roundToInt() else (ref.u[i].toInt() and 255)).coerceIn(0, 255).toByte()
+            vAvg[i] = (if (wgt > 0f) (vAcc[i] / wgt).roundToInt() else (ref.v[i].toInt() and 255)).coerceIn(0, 255).toByte()
+        }
+        val avgFrame = Frame(ref.y, uAvg, vAvg)
 
         progress("Setze zusammen …")
         val prior = 0.02f
@@ -147,9 +165,35 @@ object SuperRes {
         }
 
         val px = IntArray(wo * ho)
-        val merged = toBitmap(acc, ref, r, u, wo, ho, px)
+        val merged = toBitmap(acc, avgFrame, r, u, wo, ho, px)
         val single = toBitmap(wt, ref, r, u, wo, ho, px)
         return Result(merged, single, good.size + 1, total)
+    }
+
+    /** Farbebenen eines Bildes verschoben aufaddieren: Referenz(q) ≈ Bild(q − d). */
+    private fun addChroma(
+        f: Frame, dx: Float, dy: Float, cw: Int, ch: Int,
+        uAcc: FloatArray, vAcc: FloatArray, cWt: FloatArray,
+    ) {
+        val hx = dx / 2f
+        val hy = dy / 2f
+        for (y in 0 until ch) {
+            val sy = y - hy
+            if (sy < 0f || sy >= ch - 1) continue
+            val iy = sy.toInt()
+            val ay = sy - iy
+            for (x in 0 until cw) {
+                val sx = x - hx
+                if (sx < 0f || sx >= cw - 1) continue
+                val ix = sx.toInt()
+                val i = iy * cw + ix
+                val ax = sx - ix
+                val k = y * cw + x
+                uAcc[k] += lerp2(f.u, i, cw, ax, ay)
+                vAcc[k] += lerp2(f.v, i, cw, ax, ay)
+                cWt[k] += 1f
+            }
+        }
     }
 
     private fun sharpness(y: ByteArray, w: Int, h: Int): Float {

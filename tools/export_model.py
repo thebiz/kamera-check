@@ -8,7 +8,10 @@ macht die App selbst.
 Eingang:  input  [1, 3, T, T]   RGB 0..1
 Ausgang:  output [1, 48, T, T]  → per Pixel-Shuffle zu [3, 4T, 4T]
 
-Aufruf: python3 export_model.py realesr-general-x4v3.pth sr.onnx [T]
+Aufruf: python3 export_model.py realesr-general-x4v3.pth sr.onnx [T] [realesr-general-wdn-x4v3.pth ANTEIL]
+
+Mit dem wdn-Modell und ANTEIL (0..1) werden die Gewichte gemischt wie bei
+Real-ESRGANs "denoise strength": 1 = glatt, 0 = natürlich. Die App nutzt 0,5.
 """
 import pickle
 import sys
@@ -99,5 +102,9 @@ if __name__ == "__main__":
     src, dst = sys.argv[1], sys.argv[2]
     tile = int(sys.argv[3]) if len(sys.argv) > 3 else 128
     sd = load_pth(src)
+    if len(sys.argv) > 5:
+        wdn = load_pth(sys.argv[4])
+        a = float(sys.argv[5])
+        sd = {k: a * sd[k] + (1 - a) * wdn[k] for k in sd}
     onnx.save(build(sd, tile), dst)
     print("ok", dst, len(sd), "Tensoren")

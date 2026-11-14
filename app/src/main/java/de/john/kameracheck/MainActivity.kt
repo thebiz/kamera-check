@@ -3,10 +3,10 @@ package de.john.kameracheck
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.ImageFormat
 import android.graphics.Matrix
@@ -30,7 +30,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
-import android.provider.MediaStore
 import android.util.Size
 import android.view.GestureDetector
 import android.view.Gravity
@@ -46,6 +45,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -69,6 +69,7 @@ class MainActivity : Activity() {
     private lateinit var lupeBox: FrameLayout
     private lateinit var lupeImage: ImageView
     private lateinit var lupeLabel: TextView
+    private lateinit var thumb: ImageView
     private val presetChips = mutableListOf<Pair<Float, TextView>>()
 
     // ── Kamera ──
@@ -120,6 +121,15 @@ class MainActivity : Activity() {
         orientationListener = object : OrientationEventListener(this) {
             override fun onOrientationChanged(o: Int) {
                 if (o != ORIENTATION_UNKNOWN) deviceOrientation = ((o + 45) / 90 * 90) % 360
+            }
+        }
+
+        // Vorschaubild des letzten Fotos
+        val last = File(cacheDir, ViewerActivity.KI)
+        if (last.exists()) {
+            BitmapFactory.decodeFile(last.path, BitmapFactory.Options().apply { inSampleSize = 16 })?.let {
+                thumb.setImageBitmap(it)
+                thumb.visibility = View.VISIBLE
             }
         }
 
@@ -271,11 +281,36 @@ class MainActivity : Activity() {
         chips2.addView(macroChip, chipParams())
         panel.addView(chips2, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8f) })
 
+        // Auslöser-Zeile: Vorschaubild · Auslöser · Platzhalter
+        val shotRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        thumb = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            val r = dp(12f).toFloat()
+            background = GradientDrawable().apply {
+                cornerRadius = r
+                setColor(0xFF000000.toInt())
+                setStroke(dp(1.5f), 0xFF555555.toInt())
+            }
+            outlineProvider = object : ViewOutlineProvider() {
+                override fun getOutline(v: View, o: Outline) = o.setRoundRect(0, 0, v.width, v.height, r)
+            }
+            clipToOutline = true
+            visibility = View.INVISIBLE
+            setOnClickListener { startActivity(Intent(this@MainActivity, ViewerActivity::class.java)) }
+        }
+        shotRow.addView(thumb, LinearLayout.LayoutParams(dp(54f), dp(54f)))
         shutter = View(this).apply {
             background = shutterBg()
             setOnClickListener { shoot() }
         }
-        panel.addView(shutter, LinearLayout.LayoutParams(dp(74f), dp(74f)).apply { topMargin = dp(14f) })
+        shotRow.addView(shutter, LinearLayout.LayoutParams(dp(74f), dp(74f)).apply {
+            leftMargin = dp(32f); rightMargin = dp(32f)
+        })
+        shotRow.addView(View(this), LinearLayout.LayoutParams(dp(54f), dp(54f)))
+        panel.addView(shotRow, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(14f) })
 
         val hint = TextView(this).apply {
             text = "Tippen: Fokus · Doppeltippen: Autofokus · Zwei Finger: Zoom"
@@ -662,7 +697,7 @@ class MainActivity : Activity() {
         lupeBox.visibility = View.GONE
 
         val z = zoom
-        val count = if (z >= 2f) 10 else 6
+        val count = if (z >= 2f) 16 else 8
         val rotation = (sensorOrientation + deviceOrientation) % 360
         val col = Collector(Region.compute(yuvSize.width, yuvSize.height, z), count, z, rotation)
         collecting = col
@@ -676,8 +711,16 @@ class MainActivity : Activity() {
                 // Ganzes Sensorbild holen, den Ausschnitt rechnen wir selbst
                 b.set(CaptureRequest.CONTROL_ZOOM_RATIO, 1f)
                 b.set(CaptureRequest.CONTROL_AE_LOCK, true)
+                // Kamera-eigenes Schärfen und Glätten aus: echtes Detail behalten,
+                // das Rauschen mitteln wir über die Bildserie selbst weg
                 b.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
-                b.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+                val nr = chars?.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES) ?: IntArray(0)
+                val nrMode = when {
+                    CaptureRequest.NOISE_REDUCTION_MODE_OFF in nr -> CaptureRequest.NOISE_REDUCTION_MODE_OFF
+                    CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL in nr -> CaptureRequest.NOISE_REDUCTION_MODE_MINIMAL
+                    else -> CaptureRequest.NOISE_REDUCTION_MODE_FAST
+                }
+                b.set(CaptureRequest.NOISE_REDUCTION_MODE, nrMode)
                 val req = b.build()
                 s.captureBurst(List(count) { req }, null, handler)
             } catch (e: Exception) {
@@ -736,9 +779,24 @@ class MainActivity : Activity() {
                 showStatus("Speichere …")
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
                 val tag = "${fmt(col.zoomAtShot).replace(',', '-')}x"
-                save(rotate(normal, col.rotation), "zoom_${stamp}_${tag}_1-normal")
-                save(rotate(kiBmp, col.rotation), "zoom_${stamp}_${tag}_2-KI")
-                showStatus("Gespeichert ✓  ${res.used} Bilder · KI ${fmt(secs)} s")
+                val n = rotate(normal, col.rotation)
+                val k = rotate(kiBmp, col.rotation)
+
+                // Für die Bildansicht: beide Versionen im App-Speicher
+                File(cacheDir, ViewerActivity.NORMAL).outputStream().use { n.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+                File(cacheDir, ViewerActivity.KI).outputStream().use { k.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+                // In die Galerie nur das KI-Bild
+                ViewerActivity.saveToGallery(this, k, "zoom_${stamp}_${tag}_KI")
+
+                val small = Bitmap.createScaledBitmap(k, dp(54f) * 2, dp(54f) * 2 * k.height / k.width, true)
+                n.recycle()
+                k.recycle()
+                showStatus("Fertig ✓  ${res.used} Bilder · KI ${fmt(secs)} s")
+                runOnUiThread {
+                    thumb.setImageBitmap(small)
+                    thumb.visibility = View.VISIBLE
+                    startActivity(Intent(this, ViewerActivity::class.java))
+                }
             } catch (e: OutOfMemoryError) {
                 showStatus("Zu wenig Speicher – etwas mehr zoomen")
             } catch (e: Throwable) {
@@ -756,22 +814,6 @@ class MainActivity : Activity() {
         val r = Bitmap.createBitmap(b, 0, 0, b.width, b.height, Matrix().apply { postRotate(deg.toFloat()) }, true)
         if (r !== b) b.recycle()
         return r
-    }
-
-    private fun save(b: Bitmap, name: String) {
-        val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, "$name.jpg")
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Kamera-Check")
-            put(MediaStore.Images.Media.IS_PENDING, 1)
-        }
-        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            ?: throw IllegalStateException("Galerie nicht erreichbar")
-        contentResolver.openOutputStream(uri)!!.use { b.compress(Bitmap.CompressFormat.JPEG, 95, it) }
-        values.clear()
-        values.put(MediaStore.Images.Media.IS_PENDING, 0)
-        contentResolver.update(uri, values, null, null)
-        b.recycle()
     }
 
     companion object {
