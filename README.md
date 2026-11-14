@@ -18,6 +18,8 @@ Experimentelle KI-Zoom-Kamera für Android (getestet auf Poco X7 Pro).
 - „Check“ zeigt, welche Kamera-Funktionen das Handy freigibt
 - Die App wählt beim Start automatisch den schnellsten Rechenweg (KI-Chip oder Prozessor)
 
+**Forschungsdokument (lesbar):** [Forschung.html](https://github.com/thebiz/kamera-check/releases/latest/download/Forschung.html) · Quelle: [docs/FORSCHUNG.md](docs/FORSCHUNG.md)
+
 **Neueste APK:** [kamera-check.apk](https://github.com/thebiz/kamera-check/releases/latest/download/kamera-check.apk)
 
 ## KI-Modell

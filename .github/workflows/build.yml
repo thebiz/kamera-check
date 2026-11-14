@@ -29,9 +29,17 @@ jobs:
       - name: APK umbenennen
         run: cp app/build/outputs/apk/debug/app-debug.apk kamera-check.apk
 
+      - name: Forschungsdokument als lesbare Seite
+        run: |
+          python3 -m pip install --quiet --break-system-packages markdown
+          python3 tools/md2html.py docs/FORSCHUNG.md Forschung.html
+
       - name: Release veröffentlichen
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.run_number }}
           name: Kamera-Check ${{ github.run_number }}
-          files: kamera-check.apk
+          body: "Wie alles funktioniert und was wir gelernt haben: Forschung.html (unten bei den Dateien)."
+          files: |
+            kamera-check.apk
+            Forschung.html
