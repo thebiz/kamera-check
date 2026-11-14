@@ -55,7 +55,7 @@ class ViewerActivity : Activity() {
 
         val seek = SeekBar(this).apply {
             max = 100
-            progress = 100
+            progress = DEFAULT_MIX
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) = setMix(p / 100f)
                 override fun onStartTrackingTouch(s: SeekBar) {}
@@ -83,21 +83,27 @@ class ViewerActivity : Activity() {
 
         root.addView(panel)
         setContentView(root)
-        setMix(1f)
+        setMix(DEFAULT_MIX / 100f)
 
         val normal = BitmapFactory.decodeFile(File(cacheDir, NORMAL).path)
         val ki = BitmapFactory.decodeFile(File(cacheDir, KI).path)
-        if (normal == null || ki == null) {
+        val real = BitmapFactory.decodeFile(File(cacheDir, REAL).path) ?: normal
+        if (normal == null || ki == null || real == null) {
             mixLabel.text = "Noch kein Foto vorhanden"
             saveBtn.visibility = View.GONE
             return
         }
-        compare.setImages(normal, ki)
+        compare.setImages(normal, real, ki)
     }
 
     private fun setMix(v: Float) {
         compare.mix = v
-        mixLabel.text = "KI-Anteil: ${(v * 100).roundToInt()} %"
+        val pct = (v * 100).roundToInt()
+        mixLabel.text = when (pct) {
+            0 -> "KI-Anteil: 0 % · nur echte Details"
+            100 -> "KI-Anteil: 100 % · volle KI"
+            else -> "KI-Anteil: $pct %"
+        }
     }
 
     private fun dp(v: Float) = (v * resources.displayMetrics.density).roundToInt()
@@ -142,7 +148,9 @@ class ViewerActivity : Activity() {
 
     companion object {
         const val NORMAL = "letztes_normal.jpg"
+        const val REAL = "letztes_mehrbild.jpg"
         const val KI = "letztes_ki.jpg"
+        const val DEFAULT_MIX = 60
         private const val BG = 0xFF111111.toInt()
         private const val FG = 0xFFEDEDED.toInt()
         private const val MUTED = 0xFF8A8A8A.toInt()

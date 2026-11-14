@@ -105,14 +105,22 @@ class AiUpscaler private constructor(
     private fun starts(n: Int): IntArray =
         if (n <= T) intArrayOf(0) else IntArray((n + ST - 1) / ST) { it * ST }
 
-    /** Skaliert ein Bild ×4 hoch. progress(fertig, gesamt) */
-    fun upscale(src: Bitmap, progress: ((Int, Int) -> Unit)? = null): Bitmap {
+    /** Anzahl Kacheln für ein Bild dieser Größe. */
+    fun tilesFor(w: Int, h: Int) = starts(w).size * starts(h).size
+
+    /**
+     * Skaliert ein Bild ×4 hoch – oder mit half = true ×2 (KI rechnet ×4,
+     * je 2×2 Pixel werden gemittelt: feinere Kanten als direktes ×2).
+     * progress(fertig, gesamt)
+     */
+    fun upscale(src: Bitmap, half: Boolean = false, progress: ((Int, Int) -> Unit)? = null): Bitmap {
         val w = src.width
         val h = src.height
         val px = IntArray(w * h)
         src.getPixels(px, 0, w, 0, 0, w, h)
-        val w4 = w * 4
-        val out = IntArray(w4 * h * 4)
+        val f = if (half) 2 else 4
+        val wf = w * f
+        val out = IntArray(wf * h * f)
         val inBuf = FloatArray(3 * TT)
 
         val ys = starts(h)
@@ -150,14 +158,33 @@ class AiUpscaler private constructor(
                     val br = inBuf[idx]
                     val bgv = inBuf[TT + idx]
                     val bb = inBuf[2 * TT + idx]
-                    for (i in 0 until 4) {
-                        val row = (y * 4 + i) * w4 + x * 4
-                        for (j in 0 until 4) {
-                            val k = i * 4 + j
-                            val r = to8(o[k * TT + idx] + br)
-                            val g = to8(o[(16 + k) * TT + idx] + bgv)
-                            val b = to8(o[(32 + k) * TT + idx] + bb)
-                            out[row + j] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                    if (!half) {
+                        for (i in 0 until 4) {
+                            val row = (y * 4 + i) * wf + x * 4
+                            for (j in 0 until 4) {
+                                val k = i * 4 + j
+                                val r = to8(o[k * TT + idx] + br)
+                                val g = to8(o[(16 + k) * TT + idx] + bgv)
+                                val b = to8(o[(32 + k) * TT + idx] + bb)
+                                out[row + j] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                            }
+                        }
+                    } else {
+                        for (i in 0 until 2) {
+                            val row = (y * 2 + i) * wf + x * 2
+                            for (j in 0 until 2) {
+                                var r = 0f
+                                var g = 0f
+                                var b = 0f
+                                for (a in 0 until 2) for (c in 0 until 2) {
+                                    val k = (2 * i + a) * 4 + (2 * j + c)
+                                    r += o[k * TT + idx]
+                                    g += o[(16 + k) * TT + idx]
+                                    b += o[(32 + k) * TT + idx]
+                                }
+                                out[row + j] = (0xFF shl 24) or (to8(r / 4f + br) shl 16) or
+                                    (to8(g / 4f + bgv) shl 8) or to8(b / 4f + bb)
+                            }
                         }
                     }
                 }
@@ -165,7 +192,7 @@ class AiUpscaler private constructor(
             done++
             progress?.invoke(done, total)
         }
-        return Bitmap.createBitmap(out, w4, h * 4, Bitmap.Config.ARGB_8888)
+        return Bitmap.createBitmap(out, wf, h * f, Bitmap.Config.ARGB_8888)
     }
 
     private fun to8(v: Float): Int {

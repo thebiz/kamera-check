@@ -15,15 +15,17 @@ import android.view.ScaleGestureDetector
 import android.view.View
 import kotlin.math.abs
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
- * Vergleich Normal ↔ KI: links der Linie das Normalbild, rechts das KI-Bild
- * (mit einstellbarem KI-Anteil). Zwei Finger zoomen, ein Finger verschiebt,
+ * Vergleich: links der Linie das Normalbild, rechts das Ergebnis – stufenlos
+ * zwischen Mehrbild (echtes Detail) und KI-Version gemischt. Zwei Finger zoomen, ein Finger verschiebt,
  * an der Linie ziehen verschiebt den Vergleich, Doppeltippen zoomt 3×.
  */
 class CompareView(ctx: Context) : View(ctx) {
 
     private var normal: Bitmap? = null
+    private var real: Bitmap? = null
     private var ki: Bitmap? = null
 
     var mix = 1f
@@ -61,8 +63,9 @@ class CompareView(ctx: Context) : View(ctx) {
     }
     private val labelBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xAA000000.toInt() }
 
-    fun setImages(n: Bitmap, k: Bitmap) {
+    fun setImages(n: Bitmap, r: Bitmap, k: Bitmap) {
         normal = n
+        real = r
         ki = k
         fit()
         invalidate()
@@ -100,6 +103,7 @@ class CompareView(ctx: Context) : View(ctx) {
 
     override fun onDraw(c: Canvas) {
         val n = normal ?: return
+        val re = real ?: return
         val k = ki ?: return
         val s = baseScale * zoom
         m.setScale(s, s)
@@ -113,7 +117,7 @@ class CompareView(ctx: Context) : View(ctx) {
 
         c.save()
         c.clipRect(dx, 0f, width.toFloat(), height.toFloat())
-        if (mix < 1f) c.drawBitmap(n, m, imgPaint)
+        if (mix < 1f) c.drawBitmap(re, m, imgPaint)
         kiPaint.alpha = (mix * 255).toInt()
         c.drawBitmap(k, m, kiPaint)
         c.restore()
@@ -126,7 +130,12 @@ class CompareView(ctx: Context) : View(ctx) {
 
         // Beschriftung
         label(c, "Normal", 12f * d, true)
-        label(c, if (mix >= 0.999f) "KI" else "KI ${(mix * 100).toInt()} %", width - 12f * d, false)
+        val right = when {
+            mix >= 0.995f -> "KI"
+            mix <= 0.005f -> "Mehrbild"
+            else -> "Mehrbild + KI ${(mix * 100).roundToInt()} %"
+        }
+        label(c, right, width - 12f * d, false)
     }
 
     private fun label(c: Canvas, t: String, x: Float, left: Boolean) {
@@ -180,9 +189,9 @@ class CompareView(ctx: Context) : View(ctx) {
         return true
     }
 
-    /** Mischt Normal und KI im gewählten Anteil zu einem neuen Bild. */
+    /** Mischt Mehrbild und KI im gewählten Anteil zu einem neuen Bild. */
     fun renderMix(): Bitmap {
-        val n = normal!!
+        val n = real!!
         val k = ki!!
         val out = Bitmap.createBitmap(k.width, k.height, Bitmap.Config.ARGB_8888)
         val c = Canvas(out)

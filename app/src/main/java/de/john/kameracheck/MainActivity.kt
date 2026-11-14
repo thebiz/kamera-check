@@ -22,9 +22,12 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
+import android.media.Image
 import android.media.ImageReader
 import android.os.Bundle
 import android.os.Handler
@@ -46,6 +49,7 @@ import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import java.io.File
+import java.nio.ByteOrder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -80,6 +84,8 @@ class MainActivity : Activity() {
     private var device: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
+    private var rawReader: ImageReader? = null
+    private var rawParamsBase: RawBase? = null
     private var previewSurface: Surface? = null
     private var previewSize = Size(1440, 1080)
     private var yuvSize = Size(4096, 3072)
@@ -105,9 +111,18 @@ class MainActivity : Activity() {
     @Volatile private var busy = false
     private var collecting: Collector? = null
 
-    private inner class Collector(val region: Region, val count: Int, val zoomAtShot: Float, val rotation: Int) {
-        val frames = mutableListOf<Frame?>()
+    /** Fest vom Sensor: Bayer-Muster, Weißpunkt, Schwarzwerte. */
+    private class RawBase(val cfa: Int, val white: Float, val black: FloatArray)
+
+    private inner class Collector(
+        val region: Region, val count: Int, val zoomAtShot: Float, val rotation: Int, val withRaw: Boolean,
+    ) {
+        val yuv = java.util.TreeMap<Long, Frame>()
+        val raw = java.util.TreeMap<Long, ShortArray>()
+        val results = java.util.TreeMap<Long, TotalCaptureResult>()
         var done = false
+
+        fun complete(): Int = if (withRaw) yuv.keys.count { it in raw } else yuv.size
     }
 
     // ───────────────────────── Aufbau ─────────────────────────
@@ -516,20 +531,46 @@ class MainActivity : Activity() {
             .filter { it.width * 3 == it.height * 4 && it.width <= 1920 }
             .maxByOrNull { it.width } ?: Size(1440, 1080)
 
-        reader = ImageReader.newInstance(yuvSize.width, yuvSize.height, ImageFormat.YUV_420_888, 14).apply {
+        reader = ImageReader.newInstance(yuvSize.width, yuvSize.height, ImageFormat.YUV_420_888, 8).apply {
             setOnImageAvailableListener({ r ->
                 val img = r.acquireNextImage() ?: return@setOnImageAvailableListener
                 try {
                     val col = collecting
-                    if (col != null && !col.done && col.frames.size < col.count) {
-                        col.frames.add(SuperRes.copyFrame(img, col.region))
-                        showStatus("Halt still … ${col.frames.size}/${col.count}")
-                        if (col.frames.size == col.count) finishBurst(col)
+                    if (col != null && !col.done && col.yuv.size < col.count) {
+                        col.yuv[img.timestamp] = SuperRes.copyFrame(img, col.region)
+                        onBurstImage(col)
                     }
                 } finally {
                     img.close()
                 }
             }, handler)
+        }
+
+        // RAW nur, wenn das Bayer-Muster bekannt ist und RAW genauso groß ist wie YUV
+        rawReader = null
+        rawParamsBase = null
+        val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: IntArray(0)
+        val cfa = c.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: -1
+        val rawSize = map.getOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull { it.width.toLong() * it.height }
+        if (CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW in caps && cfa in 0..3 && rawSize == yuvSize) {
+            val white = (c.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL) ?: 1023).toFloat()
+            val bp = c.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)
+            val black = FloatArray(4) { i -> (bp?.getOffsetForIndex(i and 1, i shr 1) ?: 64).toFloat() }
+            rawParamsBase = RawBase(cfa, white, black)
+            rawReader = ImageReader.newInstance(rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 6).apply {
+                setOnImageAvailableListener({ r ->
+                    val img = r.acquireNextImage() ?: return@setOnImageAvailableListener
+                    try {
+                        val col = collecting
+                        if (col != null && col.withRaw && !col.done && col.raw.size < col.count) {
+                            col.raw[img.timestamp] = copyRaw(img, col.region)
+                            onBurstImage(col)
+                        }
+                    } finally {
+                        img.close()
+                    }
+                }, handler)
+            }
         }
 
         cm.openCamera(camId, object : CameraDevice.StateCallback() {
@@ -556,7 +597,8 @@ class MainActivity : Activity() {
         st.setDefaultBufferSize(previewSize.width, previewSize.height)
         val ps = Surface(st)
         previewSurface = ps
-        val outputs = listOf(OutputConfiguration(ps), OutputConfiguration(reader!!.surface))
+        val outputs = mutableListOf(OutputConfiguration(ps), OutputConfiguration(reader!!.surface))
+        rawReader?.let { outputs += OutputConfiguration(it.surface) }
         val exec = Executor { handler.post(it) }
         d.createCaptureSession(SessionConfiguration(SessionConfiguration.SESSION_REGULAR, outputs, exec,
             object : CameraCaptureSession.StateCallback() {
@@ -565,7 +607,13 @@ class MainActivity : Activity() {
                     startPreview()
                 }
                 override fun onConfigureFailed(s: CameraCaptureSession) {
-                    showStatus("Kamera ließ sich nicht starten")
+                    if (rawReader != null) {
+                        // Ohne RAW nochmal versuchen
+                        rawReader?.close()
+                        rawReader = null
+                        rawParamsBase = null
+                        createSession()
+                    } else showStatus("Kamera ließ sich nicht starten")
                 }
             }))
     }
@@ -579,6 +627,8 @@ class MainActivity : Activity() {
         device = null
         reader?.close()
         reader = null
+        rawReader?.close()
+        rawReader = null
         previewSurface?.release()
         previewSurface = null
     }
@@ -697,9 +747,10 @@ class MainActivity : Activity() {
         lupeBox.visibility = View.GONE
 
         val z = zoom
-        val count = if (z >= 2f) 16 else 8
+        val withRaw = z >= 2f && rawReader != null
+        val count = if (withRaw) 12 else if (z >= 2f) 16 else 8
         val rotation = (sensorOrientation + deviceOrientation) % 360
-        val col = Collector(Region.compute(yuvSize.width, yuvSize.height, z), count, z, rotation)
+        val col = Collector(Region.compute(yuvSize.width, yuvSize.height, z), count, z, rotation, withRaw)
         collecting = col
         showStatus("Halt still …")
 
@@ -708,9 +759,11 @@ class MainActivity : Activity() {
                 s.stopRepeating()
                 val b = baseRequest(CameraDevice.TEMPLATE_PREVIEW)
                 b.addTarget(reader!!.surface)
+                if (withRaw) b.addTarget(rawReader!!.surface)
                 // Ganzes Sensorbild holen, den Ausschnitt rechnen wir selbst
                 b.set(CaptureRequest.CONTROL_ZOOM_RATIO, 1f)
                 b.set(CaptureRequest.CONTROL_AE_LOCK, true)
+                b.set(CaptureRequest.CONTROL_AWB_LOCK, true)
                 // Kamera-eigenes Schärfen und Glätten aus: echtes Detail behalten,
                 // das Rauschen mitteln wir über die Bildserie selbst weg
                 b.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
@@ -722,17 +775,54 @@ class MainActivity : Activity() {
                 }
                 b.set(CaptureRequest.NOISE_REDUCTION_MODE, nrMode)
                 val req = b.build()
-                s.captureBurst(List(count) { req }, null, handler)
+                s.captureBurst(List(count) { req }, object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureCompleted(
+                        session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult,
+                    ) {
+                        val ts = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+                        if (collecting === col) col.results[ts] = result
+                    }
+                }, handler)
             } catch (e: Exception) {
                 failShot("Aufnahme fehlgeschlagen")
                 return@post
             }
             handler.postDelayed({
                 if (collecting === col && !col.done) {
-                    if (col.frames.size >= 3) finishBurst(col) else failShot("Zu wenige Bilder bekommen")
+                    if (col.complete() >= 4) finishBurst(col) else failShot("Zu wenige Bilder bekommen")
                 }
-            }, 4000)
+            }, 5000)
         }
+    }
+
+    private fun onBurstImage(col: Collector) {
+        val n = col.complete()
+        showStatus("Halt still … $n/${col.count}")
+        if (n >= col.count) finishBurst(col)
+    }
+
+    /** RAW-Ausschnitt (16 Bit je Pixel) kopieren. */
+    private fun copyRaw(img: Image, r: Region): ShortArray {
+        val p = img.planes[0]
+        val buf = p.buffer.order(ByteOrder.LITTLE_ENDIAN)
+        val rs = p.rowStride
+        val ps = p.pixelStride
+        val out = ShortArray(r.rw * r.rh)
+        for (row in 0 until r.rh) {
+            buf.position((r.y0 + row) * rs + r.x0 * ps)
+            buf.asShortBuffer().get(out, row * r.rw, r.rw)
+        }
+        return out
+    }
+
+    private fun rawParams(res: TotalCaptureResult?): RawSR.Params {
+        val base = rawParamsBase!!
+        val dyn = res?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
+        val black = if (dyn != null && dyn.size == 4) dyn.copyOf() else base.black
+        val white = res?.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)?.toFloat() ?: base.white
+        val g = res?.get(CaptureResult.COLOR_CORRECTION_GAINS)
+        val wb = if (g != null) floatArrayOf(g.red, (g.greenEven + g.greenOdd) / 2f, g.blue) else floatArrayOf(2f, 1f, 1.6f)
+        return RawSR.Params(base.cfa, white, black, wb)
     }
 
     private fun failShot(msg: String) {
@@ -745,53 +835,97 @@ class MainActivity : Activity() {
     }
 
     private fun finishBurst(col: Collector) {
+        if (col.done) return
         col.done = true
         collecting = null
         startPreview()
-        val frames = col.frames
         val a = ai!!
+
+        val keys = if (col.withRaw) col.yuv.keys.filter { it in col.raw } else col.yuv.keys.toList()
+        val frames: MutableList<Frame?> = keys.map { col.yuv[it] }.toMutableList()
+        val raws: MutableList<ShortArray?>? = if (col.withRaw) keys.map { col.raw[it] }.toMutableList() else null
+        val result = keys.firstNotNullOfOrNull { col.results[it] } ?: col.results.values.firstOrNull()
+        col.yuv.clear()
+        col.raw.clear()
+        col.results.clear()
+
         aiWorker.execute {
             try {
-                // 1. Bildserie ausrichten und mitteln
-                val res = SuperRes.process(frames, col.region) { showStatus(it) }
+                val r = col.region
 
-                // 2. KI-Eingang begrenzen (lange Seite max. 1024 px → Ergebnis max. 4096 px)
-                val m = res.merged
-                val long = max(m.width, m.height)
-                val input = if (long > MAX_AI_INPUT) {
-                    val f = MAX_AI_INPUT.toFloat() / long
-                    Bitmap.createScaledBitmap(m, (m.width * f).roundToInt(), (m.height * f).roundToInt(), true)
-                        .also { m.recycle() }
-                } else m
+                // 1. YUV-Serie ausrichten und mitteln (Farbe, Helligkeits-Referenz)
+                val res = SuperRes.process(frames, r) { showStatus(it) }
 
-                // 3. KI ×4
+                // 2. Mehrbild-Superauflösung aus RAW (echte Details auf feinerem Raster)
+                var real: Bitmap = res.merged
+                var srNote = ""
+                var half = false
+                if (raws != null && rawParamsBase != null) {
+                    try {
+                        val geo = RawSR.Geo(r.x0, r.y0, r.rw, r.rh, r.cx, r.cy, r.cw, r.ch)
+                        val out = RawSR.run(raws, geo, rawParams(result), res.refIdx, res.refY, res.mergedY, 4) {
+                            showStatus(it)
+                        }
+                        real = SuperRes.toBitmap(out.y, res.chroma, r, out.u, out.wo, out.ho)
+                        res.merged.recycle()
+                        srNote = " · RAW ${fmt(out.u)}×"
+                        half = true
+                    } catch (e: OutOfMemoryError) {
+                        srNote = " · ohne RAW (Speicher)"
+                    }
+                    raws.clear()
+                }
+
+                // 3. KI auf das Mehrbild – Größe nach Zeitbudget (≈ 45 s) begrenzen
+                val maxTiles = max(40L, 45_000L / max(1L, a.msPerTile)).toInt()
+                val longCap = if (half) 2400f else MAX_AI_INPUT.toFloat()
+                var sc = min(1f, longCap / max(real.width, real.height))
+                while (sc > 0.3f && a.tilesFor((real.width * sc).toInt(), (real.height * sc).toInt()) > maxTiles) sc *= 0.9f
+                val input = if (sc < 0.999f)
+                    Bitmap.createScaledBitmap(real, (real.width * sc).roundToInt(), (real.height * sc).roundToInt(), true)
+                else real
+
                 val t0 = SystemClock.elapsedRealtime()
-                val kiBmp = a.upscale(input) { done, total ->
+                val kiBmp = a.upscale(input, half) { done, total ->
                     showStatus("KI rekonstruiert … ${done * 100 / total} %")
                 }
-                input.recycle()
+                if (input !== real) input.recycle()
                 val secs = (SystemClock.elapsedRealtime() - t0) / 100 / 10f
-
-                // 4. Vergleichsbild: normales Digitalzoom-Einzelbild in gleicher Größe
-                val normal = Bitmap.createScaledBitmap(res.single, kiBmp.width, kiBmp.height, true)
-                if (normal !== res.single) res.single.recycle()
+                val kw = kiBmp.width
+                val kh = kiBmp.height
 
                 showStatus("Speichere …")
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
                 val tag = "${fmt(col.zoomAtShot).replace(',', '-')}x"
-                val n = rotate(normal, col.rotation)
-                val k = rotate(kiBmp, col.rotation)
 
-                // Für die Bildansicht: beide Versionen im App-Speicher
-                File(cacheDir, ViewerActivity.NORMAL).outputStream().use { n.compress(Bitmap.CompressFormat.JPEG, 95, it) }
-                File(cacheDir, ViewerActivity.KI).outputStream().use { k.compress(Bitmap.CompressFormat.JPEG, 95, it) }
-                // In die Galerie nur das KI-Bild
-                ViewerActivity.saveToGallery(this, k, "zoom_${stamp}_${tag}_KI")
-
-                val small = Bitmap.createScaledBitmap(k, dp(54f) * 2, dp(54f) * 2 * k.height / k.width, true)
+                // Normal (Einzelbild, digital gezoomt)
+                val n = rotate(Bitmap.createScaledBitmap(res.single, kw, kh, true), col.rotation)
+                cacheJpeg(n, ViewerActivity.NORMAL)
+                if (n !== res.single) res.single.recycle()
                 n.recycle()
+
+                // Mehrbild
+                val sBmp = rotate(Bitmap.createScaledBitmap(real, kw, kh, true), col.rotation)
+                if (sBmp !== real) real.recycle()
+                cacheJpeg(sBmp, ViewerActivity.REAL)
+
+                // KI
+                val k = rotate(kiBmp, col.rotation)
+                cacheJpeg(k, ViewerActivity.KI)
+
+                // In die Galerie: Mischung mit Standard-Anteil
+                val mix = Bitmap.createBitmap(k.width, k.height, Bitmap.Config.ARGB_8888)
+                android.graphics.Canvas(mix).apply {
+                    drawBitmap(sBmp, 0f, 0f, null)
+                    drawBitmap(k, 0f, 0f, android.graphics.Paint().apply { alpha = ViewerActivity.DEFAULT_MIX * 255 / 100 })
+                }
+                sBmp.recycle()
                 k.recycle()
-                showStatus("Fertig ✓  ${res.used} Bilder · KI ${fmt(secs)} s")
+                ViewerActivity.saveToGallery(this, mix, "zoom_${stamp}_${tag}")
+                val small = Bitmap.createScaledBitmap(mix, dp(54f) * 2, dp(54f) * 2 * mix.height / mix.width, true)
+                mix.recycle()
+
+                showStatus("Fertig ✓  ${res.used} Bilder$srNote · KI ${fmt(secs)} s")
                 runOnUiThread {
                     thumb.setImageBitmap(small)
                     thumb.visibility = View.VISIBLE
@@ -804,9 +938,13 @@ class MainActivity : Activity() {
             } finally {
                 busy = false
                 runOnUiThread { shutter.alpha = 1f }
-                status.postDelayed({ if (!busy) showStatus(null) }, 4000)
+                status.postDelayed({ if (!busy) showStatus(null) }, 5000)
             }
         }
+    }
+
+    private fun cacheJpeg(b: Bitmap, name: String) {
+        File(cacheDir, name).outputStream().use { b.compress(Bitmap.CompressFormat.JPEG, 95, it) }
     }
 
     private fun rotate(b: Bitmap, deg: Int): Bitmap {
