@@ -15,8 +15,6 @@ import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.graphics.drawable.InsetDrawable
-import android.graphics.drawable.LayerDrawable
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
@@ -35,6 +33,7 @@ import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Size
 import android.view.GestureDetector
+import android.view.HapticFeedbackConstants
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.OrientationEventListener
@@ -67,7 +66,9 @@ class MainActivity : Activity() {
     private lateinit var zoomLabel: TextView
     private lateinit var status: TextView
     private lateinit var seek: SeekBar
-    private lateinit var shutter: View
+    private lateinit var shutter: ShutterView
+    private lateinit var focusView: FocusView
+    private lateinit var holdLabel: TextView
     private lateinit var macroChip: TextView
     private lateinit var lupeChip: TextView
     private lateinit var lupeBox: FrameLayout
@@ -100,6 +101,19 @@ class MainActivity : Activity() {
     private var sensorOrientation = 90
     private var deviceOrientation = 0
     private lateinit var orientationListener: OrientationEventListener
+
+    // ── Fokus-Verfolgung ──
+    private val tracker = Tracker()
+    private var trackBmp: Bitmap? = null
+    private var trackPx = IntArray(0)
+    private var trackGray = IntArray(0)
+    private var pendingTrackStart = false
+    private var draggingFocus = false
+    private var afSentX = 0f
+    private var afSentY = 0f
+    private var afSentAt = 0L
+    @Volatile private var awaitLock = false
+    private var lastAfUi: FocusView.State? = null
 
     // ── KI ──
     @Volatile private var ai: AiUpscaler? = null
@@ -182,6 +196,8 @@ class MainActivity : Activity() {
         val previewBox = FrameLayout(this)
         texture = TextureView(this)
         previewBox.addView(texture, FrameLayout.LayoutParams(-1, -1))
+        focusView = FocusView(this)
+        previewBox.addView(focusView, FrameLayout.LayoutParams(-1, -1))
 
         // KI-Lupe: Mitte des Bildes, von der KI ×4 rekonstruiert
         lupeImage = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_XY }
@@ -214,8 +230,27 @@ class MainActivity : Activity() {
             })
             visibility = View.GONE
         }
-        val lupeSize = min(512, (screenW * 0.62f).roundToInt())
-        previewBox.addView(lupeBox, FrameLayout.LayoutParams(lupeSize, lupeSize, Gravity.CENTER))
+        val lupeSize = min(512, (screenW * 0.42f).roundToInt())
+        previewBox.addView(lupeBox, FrameLayout.LayoutParams(lupeSize, lupeSize, Gravity.END or Gravity.BOTTOM).apply {
+            rightMargin = dp(12f); bottomMargin = dp(64f)
+        })
+
+        // Große Ansage beim Auslösen
+        holdLabel = TextView(this).apply {
+            setTextColor(FG)
+            textSize = 20f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            gravity = Gravity.CENTER
+            setPadding(dp(20f), dp(12f), dp(20f), dp(12f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(24f).toFloat()
+                setColor(0xD9000000.toInt())
+            }
+            visibility = View.GONE
+        }
+        previewBox.addView(holdLabel, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER_HORIZONTAL or Gravity.TOP).apply {
+            topMargin = dp(64f)
+        })
 
         status = TextView(this).apply {
             setTextColor(FG)
@@ -317,8 +352,7 @@ class MainActivity : Activity() {
             setOnClickListener { startActivity(Intent(this@MainActivity, ViewerActivity::class.java)) }
         }
         shotRow.addView(thumb, LinearLayout.LayoutParams(dp(54f), dp(54f)))
-        shutter = View(this).apply {
-            background = shutterBg()
+        shutter = ShutterView(this).apply {
             setOnClickListener { shoot() }
         }
         shotRow.addView(shutter, LinearLayout.LayoutParams(dp(74f), dp(74f)).apply {
@@ -328,7 +362,7 @@ class MainActivity : Activity() {
         panel.addView(shotRow, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(14f) })
 
         val hint = TextView(this).apply {
-            text = "Tippen: Fokus · Doppeltippen: Autofokus · Zwei Finger: Zoom"
+            text = "Tippen: Fokuspunkt · Rahmen ziehen: verschieben · Doppeltippen: Autofokus"
             setTextColor(MUTED)
             textSize = 12f
             gravity = Gravity.CENTER
@@ -344,7 +378,10 @@ class MainActivity : Activity() {
             }
             override fun onSurfaceTextureSizeChanged(s: SurfaceTexture, w: Int, h: Int) {}
             override fun onSurfaceTextureDestroyed(s: SurfaceTexture) = true
-            override fun onSurfaceTextureUpdated(s: SurfaceTexture) = feedLupe()
+            override fun onSurfaceTextureUpdated(s: SurfaceTexture) {
+                trackFrame()
+                feedLupe()
+            }
         }
 
         // Gesten auf der Vorschau
@@ -356,7 +393,7 @@ class MainActivity : Activity() {
         })
         val taps = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                focusAt(e.x, e.y)
+                setFocusPoint(e.x, e.y)
                 return true
             }
             override fun onDoubleTap(e: MotionEvent): Boolean {
@@ -366,7 +403,31 @@ class MainActivity : Activity() {
         })
         texture.setOnTouchListener { _, e ->
             scale.onTouchEvent(e)
-            if (!scale.isInProgress) taps.onTouchEvent(e)
+            if (scale.isInProgress || e.pointerCount > 1) {
+                if (draggingFocus) {
+                    draggingFocus = false
+                    focusView.dragging = false
+                    setFocusPoint(focusView.fx, focusView.fy)
+                }
+                return@setOnTouchListener true
+            }
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> if (focusView.contains(e.x, e.y)) {
+                    draggingFocus = true
+                    focusView.dragging = true
+                    tracker.stop()
+                }
+                MotionEvent.ACTION_MOVE -> if (draggingFocus) {
+                    focusView.show(e.x.coerceIn(0f, texture.width.toFloat()), e.y.coerceIn(0f, texture.height.toFloat()))
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (draggingFocus) {
+                    draggingFocus = false
+                    focusView.dragging = false
+                    setFocusPoint(focusView.fx, focusView.fy)
+                    return@setOnTouchListener true
+                }
+            }
+            if (!draggingFocus) taps.onTouchEvent(e)
             true
         }
         updateChips()
@@ -392,19 +453,6 @@ class MainActivity : Activity() {
 
     private fun chipParams() = LinearLayout.LayoutParams(-2, -2).apply {
         leftMargin = dp(4f); rightMargin = dp(4f)
-    }
-
-    private fun shutterBg(): LayerDrawable {
-        val ring = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(Color.TRANSPARENT)
-            setStroke(dp(4f), FG)
-        }
-        val dot = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(FG)
-        }
-        return LayerDrawable(arrayOf(ring, InsetDrawable(dot, dp(9f))))
     }
 
     private fun styleChip(c: TextView, sel: Boolean) {
@@ -443,8 +491,11 @@ class MainActivity : Activity() {
         if (tw < AiUpscaler.T || th < AiUpscaler.T) return
         lupeBusy = true
         val full = texture.bitmap ?: run { lupeBusy = false; return }
+        val T = AiUpscaler.T
+        val sx = if (focusView.shown) focusView.fx.roundToInt() else tw / 2
+        val sy = if (focusView.shown) focusView.fy.roundToInt() else th / 2
         val crop = Bitmap.createBitmap(
-            full, (tw - AiUpscaler.T) / 2, (th - AiUpscaler.T) / 2, AiUpscaler.T, AiUpscaler.T,
+            full, (sx - T / 2).coerceIn(0, tw - T), (sy - T / 2).coerceIn(0, th - T), T, T,
         )
         full.recycle()
         aiWorker.execute {
@@ -657,13 +708,51 @@ class MainActivity : Activity() {
             val b = baseRequest(CameraDevice.TEMPLATE_PREVIEW)
             b.addTarget(ps)
             b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
-            s.setRepeatingRequest(b.build(), null, bg)
+            s.setRepeatingRequest(b.build(), previewCallback, bg)
         } catch (_: Exception) {
         }
     }
 
+    /** Liest den Schärfestatus und färbt den Fokus-Rahmen. */
+    private val previewCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
+            val af = result.get(CaptureResult.CONTROL_AF_STATE) ?: return
+            val ui = when (af) {
+                CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED,
+                CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED -> FocusView.State.SHARP
+                CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED,
+                CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED -> FocusView.State.UNSHARP
+                else -> FocusView.State.SEARCHING
+            }
+            // Nach dem gezielten Scharfstellen wieder in den Dauer-Autofokus (folgt dem Ziel)
+            if (awaitLock && !macro && (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
+                    af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED)) {
+                awaitLock = false
+                afMode = CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                bg?.post { startPreview() }
+            }
+            if (ui != lastAfUi) {
+                lastAfUi = ui
+                runOnUiThread { if (!tracker.lost) focusView.state = ui }
+            }
+        }
+    }
+
     private fun setZoom(z: Float, fromSeek: Boolean = false) {
+        val old = zoom
         zoom = z.coerceIn(1f, maxZoom)
+        if (focusView.shown && !draggingFocus && old != zoom) {
+            val cx = texture.width / 2f
+            val cy = texture.height / 2f
+            val f = zoom / old
+            val nx = cx + (focusView.fx - cx) * f
+            val ny = cy + (focusView.fy - cy) * f
+            if (nx in 0f..texture.width.toFloat() && ny in 0f..texture.height.toFloat()) {
+                focusView.show(nx, ny)
+                pendingTrackStart = true
+                updateAfRegion(nx, ny)
+            } else clearFocusPoint()
+        }
         zoomLabel.text = "${fmt(zoom)}×"
         if (!fromSeek) seek.progress = (ln(zoom) / ln(maxZoom) * 1000).roundToInt()
         updateChips()
@@ -675,33 +764,63 @@ class MainActivity : Activity() {
         return if (r == r.toInt().toFloat()) r.toInt().toString() else r.toString().replace('.', ',')
     }
 
-    private fun focusAt(vx: Float, vy: Float) {
-        val c = chars ?: return
-        val active = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return
+    /** Messbereich (Sensorkoordinaten) für einen Punkt der Vorschau. */
+    private fun regionFor(vx: Float, vy: Float): MeteringRectangle? {
+        val c = chars ?: return null
+        val active = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return null
         val nx = (vx / texture.width).coerceIn(0f, 1f)
         val ny = (vy / texture.height).coerceIn(0f, 1f)
         // Hochformat → Sensorkoordinaten
         val (sxN, syN) = if (sensorOrientation == 270) (1 - ny) to nx else ny to (1 - nx)
         val sx = (sxN * active.width()).roundToInt()
         val sy = (syN * active.height()).roundToInt()
-        val half = active.width() / 14
+        val half = active.width() / 16
         val rect = Rect(
             max(0, sx - half), max(0, sy - half),
             min(active.width() - 1, sx + half), min(active.height() - 1, sy + half),
         )
-        afRegion = MeteringRectangle(rect, MeteringRectangle.METERING_WEIGHT_MAX - 1)
+        return MeteringRectangle(rect, MeteringRectangle.METERING_WEIGHT_MAX - 1)
+    }
+
+    /** Fokuspunkt setzen: gezielt scharfstellen, dann verfolgen und laufend nachstellen. */
+    private fun setFocusPoint(vx: Float, vy: Float) {
+        focusView.show(vx, vy)
+        focusView.state = FocusView.State.SEARCHING
+        focusView.macro = macro
+        lastAfUi = null
+        pendingTrackStart = true
+        afRegion = regionFor(vx, vy) ?: return
         afMode = if (macro) CaptureRequest.CONTROL_AF_MODE_MACRO else CaptureRequest.CONTROL_AF_MODE_AUTO
+        awaitLock = !macro
+        afSentX = vx
+        afSentY = vy
+        afSentAt = SystemClock.elapsedRealtime()
         triggerAf()
-        showStatus(if (macro) "Makro-Fokus" else "Fokus fixiert")
-        status.postDelayed({ if (!busy) showStatus(null) }, 1200)
+    }
+
+    /** Ziel hat sich bewegt: Messbereich nachführen (Dauer-Autofokus stellt selbst nach). */
+    private fun updateAfRegion(vx: Float, vy: Float) {
+        afRegion = regionFor(vx, vy) ?: return
+        afSentX = vx
+        afSentY = vy
+        afSentAt = SystemClock.elapsedRealtime()
+        if (macro) triggerAf() else if (!awaitLock) bg?.post { startPreview() }
+    }
+
+    private fun clearFocusPoint() {
+        focusView.hide()
+        tracker.stop()
+        pendingTrackStart = false
+        awaitLock = false
+        afRegion = null
+        afMode = if (macro) CaptureRequest.CONTROL_AF_MODE_MACRO else CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        bg?.post { startPreview() }
     }
 
     private fun resetFocus() {
-        afRegion = null
         macro = false
-        afMode = CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
         updateChips()
-        bg?.post { startPreview() }
+        clearFocusPoint()
         showStatus("Autofokus")
         status.postDelayed({ if (!busy) showStatus(null) }, 1000)
     }
@@ -709,7 +828,48 @@ class MainActivity : Activity() {
     private fun toggleMacro() {
         macro = !macro
         updateChips()
-        if (macro) focusAt(texture.width / 2f, texture.height / 2f) else resetFocus()
+        focusView.macro = macro
+        if (macro) {
+            if (focusView.shown) setFocusPoint(focusView.fx, focusView.fy)
+            else setFocusPoint(texture.width / 2f, texture.height / 2f)
+        } else if (focusView.shown) setFocusPoint(focusView.fx, focusView.fy) else clearFocusPoint()
+    }
+
+    /** Pro Vorschaubild: Ziel im verkleinerten Bild suchen und Rahmen nachführen. */
+    private fun trackFrame() {
+        if (!focusView.shown || draggingFocus || busy || device == null) return
+        val tw = texture.width / 4
+        val th = texture.height / 4
+        if (tw < 40 || th < 40) return
+        var b = trackBmp
+        if (b == null || b.width != tw || b.height != th) {
+            b = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888)
+            trackBmp = b
+            trackPx = IntArray(tw * th)
+            trackGray = IntArray(tw * th)
+        }
+        texture.getBitmap(b)
+        b.getPixels(trackPx, 0, tw, 0, 0, tw, th)
+        Tracker.gray(trackPx, trackGray)
+
+        if (pendingTrackStart || !tracker.active) {
+            tracker.start(trackGray, tw, th, focusView.fx / 4f, focusView.fy / 4f)
+            pendingTrackStart = false
+            return
+        }
+        if (!tracker.update(trackGray, tw, th)) {
+            focusView.state = FocusView.State.LOST
+            return
+        }
+        if (focusView.state == FocusView.State.LOST) focusView.state = lastAfUi ?: FocusView.State.SEARCHING
+        val nx = tracker.x * 4f + 2f
+        val ny = tracker.y * 4f + 2f
+        focusView.show(nx, ny)
+        val moved = kotlin.math.hypot(nx - afSentX, ny - afSentY)
+        val now = SystemClock.elapsedRealtime()
+        if ((moved > dp(18f) && now - afSentAt > 150) || (macro && moved > dp(40f) && now - afSentAt > 800)) {
+            updateAfRegion(nx, ny)
+        }
     }
 
     private fun triggerAf() {
@@ -743,7 +903,8 @@ class MainActivity : Activity() {
             return
         }
         busy = true
-        shutter.alpha = 0.4f
+        shutter.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        shutter.mode = ShutterView.Mode.CAPTURING
         lupeBox.visibility = View.GONE
 
         val z = zoom
@@ -752,7 +913,8 @@ class MainActivity : Activity() {
         val rotation = (sensorOrientation + deviceOrientation) % 360
         val col = Collector(Region.compute(yuvSize.width, yuvSize.height, z), count, z, rotation, withRaw)
         collecting = col
-        showStatus("Halt still …")
+        showStatus(null)
+        showHold("Ruhig halten …")
 
         handler.post {
             try {
@@ -797,8 +959,16 @@ class MainActivity : Activity() {
 
     private fun onBurstImage(col: Collector) {
         val n = col.complete()
-        showStatus("Halt still … $n/${col.count}")
+        runOnUiThread { if (shutter.mode == ShutterView.Mode.CAPTURING) shutter.progress = n.toFloat() / col.count }
         if (n >= col.count) finishBurst(col)
+    }
+
+    private fun showHold(text: String?) = runOnUiThread {
+        if (text == null) holdLabel.visibility = View.GONE
+        else {
+            holdLabel.text = text
+            holdLabel.visibility = View.VISIBLE
+        }
     }
 
     /** RAW-Ausschnitt (16 Bit je Pixel) kopieren. */
@@ -829,7 +999,8 @@ class MainActivity : Activity() {
         collecting = null
         busy = false
         startPreview()
-        runOnUiThread { shutter.alpha = 1f }
+        showHold(null)
+        runOnUiThread { shutter.mode = ShutterView.Mode.IDLE }
         showStatus(msg)
         status.postDelayed({ showStatus(null) }, 2500)
     }
@@ -848,6 +1019,16 @@ class MainActivity : Activity() {
         col.yuv.clear()
         col.raw.clear()
         col.results.clear()
+
+        // Aufnahme fertig: kurz vibrieren, Handy darf bewegt werden
+        runOnUiThread {
+            shutter.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+            shutter.mode = ShutterView.Mode.PROCESSING
+            holdLabel.text = "✓ Fertig – du kannst loslassen"
+            holdLabel.visibility = View.VISIBLE
+            holdLabel.postDelayed({ if (shutter.mode != ShutterView.Mode.CAPTURING) holdLabel.visibility = View.GONE }, 1800)
+            pendingTrackStart = true
+        }
 
         aiWorker.execute {
             try {
@@ -937,7 +1118,7 @@ class MainActivity : Activity() {
                 showStatus("Fehler: ${e.message}")
             } finally {
                 busy = false
-                runOnUiThread { shutter.alpha = 1f }
+                runOnUiThread { shutter.mode = ShutterView.Mode.IDLE }
                 status.postDelayed({ if (!busy) showStatus(null) }, 5000)
             }
         }

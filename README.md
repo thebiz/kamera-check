@@ -7,7 +7,8 @@ Experimentelle KI-Zoom-Kamera für Android (getestet auf Poco X7 Pro).
 - **Mehrbild-Superauflösung aus RAW** (ab 2×): 12 RAW-Bilder werden ausgerichtet und ihre Bayer-Pixel auf ein bis zu doppelt so feines Raster verteilt – echte zusätzliche Details statt geratener. Helligkeit und Farbe werden an das Kamerabild angeglichen.
 - **KI obendrauf:** Real-ESRGAN läuft auf dem Mehrbild-Ergebnis, nicht auf dem Einzelbild – dadurch deutlich weniger falsch erfundene Buchstaben
 - **Bildansicht:** Normal ↔ Mehrbild/KI mit verschiebbarer Linie, Zoom und KI-Anteil-Regler; in der Galerie landet die Mischung (60 % KI)
-- Tippen zum Fokussieren, Doppeltippen für Autofokus, Makro-Schalter
+- **Fokuspunkt mit Verfolgung:** Tippen setzt einen Rahmen, der am Objekt klebt und laufend nachstellt (weiß = sucht, grün = scharf, orange = unscharf, grau gestrichelt = Ziel verloren). Rahmen ziehen verschiebt ihn, Doppeltippen = Autofokus
+- **Auslöse-Ring:** füllt sich, solange die Serie läuft; Vibration + „Fertig – du kannst loslassen“, sobald gerechnet wird
 - „Check“ zeigt, welche Kamera-Funktionen das Handy freigibt
 - Die App wählt beim Start automatisch den schnellsten Rechenweg (KI-Chip oder Prozessor)
 
