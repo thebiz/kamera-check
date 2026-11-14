@@ -1,5 +1,6 @@
 # Simuliert eine verwackelte RAW+YUV-Bildserie eines entfernten Schildes
-import numpy as np, struct
+import numpy as np, struct, sys
+ROTATE=len(sys.argv)>1
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 rng=np.random.default_rng(7)
 S=8                      # Szene ist 8× feiner als der Sensor
@@ -20,16 +21,22 @@ f3=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',72)
 d.text((880,1000),'St. Petri',font=f1,fill=(20,20,20)); d.text((900,1700),'Hamburg · 1195',font=f2,fill=(20,20,20))
 d.text((900,2000),'Gottesdienst sonntags 10 Uhr',font=f3,fill=(20,20,20)); d.text((900,2120),'Turmbesteigung 4 Euro · 544 Stufen',font=f3,fill=(20,20,20)); d.text((900,2240),'Konzert Freitag 19:30 Orgel Bach',font=f3,fill=(20,20,20))
 img=img.filter(ImageFilter.GaussianBlur(0.55*S))   # Objektiv-Unschärfe
+imgS=img
 lin=(np.asarray(img).astype(np.float32)/255)**2.2  # linear
 black,white=64,1023
+ANG=0.0
 def sensor(sx,sy):
   ox=int(round((M+sx)*S)); oy=int(round((M+sy)*S))
-  a=lin[oy:oy+RH*S, ox:ox+RW*S]
+  src=lin if ANG==0 else ROT
+  a=src[oy:oy+RH*S, ox:ox+RW*S]
   return a.reshape(RH,S,RW,S,3).mean(axis=(1,3))   # Pixel integrieren
 shifts=[(0,0)]+[tuple(rng.uniform(-3,3,2)) for _ in range(N-1)]
 raws=[]; ys=[]
 wb=np.array([0.5,1.0,0.7])   # Sensor sieht Farben "roh", WB gleicht aus
-for (sx,sy) in shifts:
+angles=[0.0]+list(rng.uniform(-0.6,0.6,N-1)) if ROTATE else [0.0]*N
+for (sx,sy),ang in zip(shifts,angles):
+  ANG=ang
+  if ang!=0: ROT=(np.asarray(imgS.rotate(ang,resample=Image.BICUBIC,center=(W/2,H/2))).astype(np.float32)/255)**2.2
   s=sensor(sx,sy)*wb          # Sensor-Rohsignal je Farbe
   bay=np.zeros((RH,RW),np.float32)
   bay[0::2,0::2]=s[0::2,0::2,0]; bay[0::2,1::2]=s[0::2,1::2,1]

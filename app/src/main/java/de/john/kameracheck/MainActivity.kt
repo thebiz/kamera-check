@@ -70,6 +70,10 @@ class MainActivity : Activity() {
     private lateinit var focusView: FocusView
     private lateinit var holdLabel: TextView
     private lateinit var macroChip: TextView
+    private lateinit var mfChip: TextView
+    private lateinit var mfRow: LinearLayout
+    private lateinit var mfLabel: TextView
+    private lateinit var mfSeek: SeekBar
     private lateinit var lupeChip: TextView
     private lateinit var lupeBox: FrameLayout
     private lateinit var lupeImage: ImageView
@@ -94,7 +98,6 @@ class MainActivity : Activity() {
 
     private var zoom = 1f
     private var maxZoom = 10f
-    private var afMode = CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
     private var afRegion: MeteringRectangle? = null
     private var macroAvailable = false
     private var macro = false
@@ -109,11 +112,6 @@ class MainActivity : Activity() {
     private var trackGray = IntArray(0)
     private var pendingTrackStart = false
     private var draggingFocus = false
-    private var afSentX = 0f
-    private var afSentY = 0f
-    private var afSentAt = 0L
-    @Volatile private var awaitLock = false
-    private var lastAfUi: FocusView.State? = null
 
     // ── KI ──
     @Volatile private var ai: AiUpscaler? = null
@@ -136,7 +134,12 @@ class MainActivity : Activity() {
         val results = java.util.TreeMap<Long, TotalCaptureResult>()
         var done = false
 
-        fun complete(): Int = if (withRaw) yuv.keys.count { it in raw } else yuv.size
+        /** Bei RAW: so viele YUV-Bilder (Farbe/Helligkeit) – der Rest der Serie ist nur RAW. */
+        val yuvCount = if (withRaw) min(count, 10) else count
+
+        /** Fortschritt 0..count */
+        fun complete(): Int = if (withRaw) min(raw.size, if (yuv.size >= yuvCount) count else raw.size) else yuv.size
+        fun finished(): Boolean = if (withRaw) raw.size >= count && yuv.size >= yuvCount else yuv.size >= count
     }
 
     // ───────────────────────── Aufbau ─────────────────────────
@@ -329,7 +332,39 @@ class MainActivity : Activity() {
         macroChip = chip("Makro") { toggleMacro() }
         macroChip.visibility = View.GONE
         chips2.addView(macroChip, chipParams())
+        mfChip = chip("Manueller Fokus") { toggleManual() }
+        chips2.addView(mfChip, chipParams())
         panel.addView(chips2, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8f) })
+
+        mfRow = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        mfLabel = TextView(this).apply {
+            setTextColor(FG)
+            textSize = 13f
+            gravity = Gravity.CENTER
+        }
+        mfRow.addView(mfLabel, LinearLayout.LayoutParams(-1, -2))
+        val mfScale = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        mfScale.addView(TextView(this).apply { text = "nah"; setTextColor(MUTED); textSize = 12f })
+        mfSeek = SeekBar(this).apply {
+            max = 1000
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) {
+                    if (fromUser) setManualFocus(p)
+                }
+                override fun onStartTrackingTouch(s: SeekBar) {}
+                override fun onStopTrackingTouch(s: SeekBar) {}
+            })
+        }
+        mfScale.addView(mfSeek, LinearLayout.LayoutParams(0, -2, 1f))
+        mfScale.addView(TextView(this).apply { text = "∞"; setTextColor(MUTED); textSize = 14f })
+        mfRow.addView(mfScale, LinearLayout.LayoutParams(-1, -2))
+        panel.addView(mfRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6f) })
 
         // Auslöser-Zeile: Vorschaubild · Auslöser · Platzhalter
         val shotRow = LinearLayout(this).apply {
@@ -379,6 +414,7 @@ class MainActivity : Activity() {
             override fun onSurfaceTextureSizeChanged(s: SurfaceTexture, w: Int, h: Int) {}
             override fun onSurfaceTextureDestroyed(s: SurfaceTexture) = true
             override fun onSurfaceTextureUpdated(s: SurfaceTexture) {
+                sweepFrame()
                 trackFrame()
                 feedLupe()
             }
@@ -463,6 +499,7 @@ class MainActivity : Activity() {
     private fun updateChips() {
         for ((z, c) in presetChips) styleChip(c, kotlin.math.abs(zoom - z) < 0.05f)
         styleChip(macroChip, macro)
+        styleChip(mfChip, mfRow.visibility == View.VISIBLE)
         styleChip(lupeChip, lupeOn)
     }
 
@@ -574,7 +611,13 @@ class MainActivity : Activity() {
 
         val afModes = c.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: IntArray(0)
         macroAvailable = CaptureRequest.CONTROL_AF_MODE_MACRO in afModes
-        runOnUiThread { macroChip.visibility = if (macroAvailable) View.VISIBLE else View.GONE }
+        // Nächste Fokus-Entfernung (Dioptrien); Xiaomi meldet sie teils nicht → 10 (= 10 cm)
+        // (0 = Fixfokus, dann kein eigener Fokus)
+        maxDiopter = c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 10f
+        runOnUiThread {
+            macroChip.visibility = if (maxDiopter > 0f) View.VISIBLE else View.GONE
+            mfChip.visibility = if (maxDiopter > 0f) View.VISIBLE else View.GONE
+        }
 
         val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
         yuvSize = map.getOutputSizes(ImageFormat.YUV_420_888).maxByOrNull { it.width.toLong() * it.height }!!
@@ -587,7 +630,7 @@ class MainActivity : Activity() {
                 val img = r.acquireNextImage() ?: return@setOnImageAvailableListener
                 try {
                     val col = collecting
-                    if (col != null && !col.done && col.yuv.size < col.count) {
+                    if (col != null && !col.done && col.yuv.size < col.yuvCount) {
                         col.yuv[img.timestamp] = SuperRes.copyFrame(img, col.region)
                         onBurstImage(col)
                     }
@@ -686,14 +729,42 @@ class MainActivity : Activity() {
 
     // ───────────────────────── Vorschau, Zoom, Fokus ─────────────────────────
 
+    // ───────────────────────── Fokus ─────────────────────────
+    //
+    // Statt Xiaomis Autofokus (der gern den Vordergrund nimmt) fährt die App den
+    // Fokus selbst durch und misst die Schärfe genau im Rahmen. Die beste Entfernung
+    // wird festgehalten; alle paar Sekunden wird fein nachgeprüft.
+
+    private enum class FocusMode { AUTO, SWEEP, LOCKED, MANUAL }
+
+    private var focusMode = FocusMode.AUTO
+    /** Aktuelle Fokus-Entfernung in Dioptrien (0 = unendlich). */
+    private var focusDiopter = 0f
+    private var maxDiopter = 10f
+    private var sweep: Sweep? = null
+    private var sweepBmp: Bitmap? = null
+    private var sweepPx = IntArray(0)
+    private var lastSweepAt = 0L
+    private var sweepX = 0f
+    private var sweepY = 0f
+
+    private class Sweep(val steps: FloatArray, val fine: Boolean, val quiet: Boolean, val restore: Float) {
+        var i = 0
+        var wait = 0
+        val score = FloatArray(steps.size)
+    }
+
     private fun baseRequest(template: Int): CaptureRequest.Builder {
         val b = device!!.createCaptureRequest(template)
         b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-        b.set(CaptureRequest.CONTROL_AF_MODE, afMode)
-        afRegion?.let {
-            b.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(it))
-            b.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(it))
+        if (focusMode == FocusMode.AUTO) {
+            b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+        } else {
+            b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+            b.set(CaptureRequest.LENS_FOCUS_DISTANCE, focusDiopter)
         }
+        // Belichtung am Fokuspunkt messen
+        afRegion?.let { b.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(it)) }
         val ois = chars?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
         if (ois?.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON) == true) {
             b.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
@@ -708,33 +779,8 @@ class MainActivity : Activity() {
             val b = baseRequest(CameraDevice.TEMPLATE_PREVIEW)
             b.addTarget(ps)
             b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
-            s.setRepeatingRequest(b.build(), previewCallback, bg)
+            s.setRepeatingRequest(b.build(), null, bg)
         } catch (_: Exception) {
-        }
-    }
-
-    /** Liest den Schärfestatus und färbt den Fokus-Rahmen. */
-    private val previewCallback = object : CameraCaptureSession.CaptureCallback() {
-        override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
-            val af = result.get(CaptureResult.CONTROL_AF_STATE) ?: return
-            val ui = when (af) {
-                CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED,
-                CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED -> FocusView.State.SHARP
-                CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED,
-                CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED -> FocusView.State.UNSHARP
-                else -> FocusView.State.SEARCHING
-            }
-            // Nach dem gezielten Scharfstellen wieder in den Dauer-Autofokus (folgt dem Ziel)
-            if (awaitLock && !macro && (af == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
-                    af == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED)) {
-                awaitLock = false
-                afMode = CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-                bg?.post { startPreview() }
-            }
-            if (ui != lastAfUi) {
-                lastAfUi = ui
-                runOnUiThread { if (!tracker.lost) focusView.state = ui }
-            }
         }
     }
 
@@ -750,7 +796,7 @@ class MainActivity : Activity() {
             if (nx in 0f..texture.width.toFloat() && ny in 0f..texture.height.toFloat()) {
                 focusView.show(nx, ny)
                 pendingTrackStart = true
-                updateAfRegion(nx, ny)
+                afRegion = regionFor(nx, ny)
             } else clearFocusPoint()
         }
         zoomLabel.text = "${fmt(zoom)}×"
@@ -764,7 +810,14 @@ class MainActivity : Activity() {
         return if (r == r.toInt().toFloat()) r.toInt().toString() else r.toString().replace('.', ',')
     }
 
-    /** Messbereich (Sensorkoordinaten) für einen Punkt der Vorschau. */
+    /** Dioptrien → lesbare Entfernung. */
+    private fun distText(d: Float): String = when {
+        d < 0.05f -> "∞"
+        1f / d >= 1f -> "${fmt(1f / d)} m"
+        else -> "${(100f / d).roundToInt()} cm"
+    }
+
+    /** Messbereich (Sensorkoordinaten) für einen Punkt der Vorschau – klein, damit nur das Ziel zählt. */
     private fun regionFor(vx: Float, vy: Float): MeteringRectangle? {
         val c = chars ?: return null
         val active = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return null
@@ -774,7 +827,7 @@ class MainActivity : Activity() {
         val (sxN, syN) = if (sensorOrientation == 270) (1 - ny) to nx else ny to (1 - nx)
         val sx = (sxN * active.width()).roundToInt()
         val sy = (syN * active.height()).roundToInt()
-        val half = active.width() / 16
+        val half = active.width() / 32
         val rect = Rect(
             max(0, sx - half), max(0, sy - half),
             min(active.width() - 1, sx + half), min(active.height() - 1, sy + half),
@@ -782,44 +835,138 @@ class MainActivity : Activity() {
         return MeteringRectangle(rect, MeteringRectangle.METERING_WEIGHT_MAX - 1)
     }
 
-    /** Fokuspunkt setzen: gezielt scharfstellen, dann verfolgen und laufend nachstellen. */
+    /** Fokuspunkt setzen: Durchlauf starten, danach festhalten und verfolgen. */
     private fun setFocusPoint(vx: Float, vy: Float) {
         focusView.show(vx, vy)
-        focusView.state = FocusView.State.SEARCHING
         focusView.macro = macro
-        lastAfUi = null
         pendingTrackStart = true
-        afRegion = regionFor(vx, vy) ?: return
-        afMode = if (macro) CaptureRequest.CONTROL_AF_MODE_MACRO else CaptureRequest.CONTROL_AF_MODE_AUTO
-        awaitLock = !macro
-        afSentX = vx
-        afSentY = vy
-        afSentAt = SystemClock.elapsedRealtime()
-        triggerAf()
+        afRegion = regionFor(vx, vy)
+        if (maxDiopter <= 0f) {
+            // Fixfokus-Kamera: nur Belichtung messen
+            focusView.state = FocusView.State.SHARP
+            bg?.post { startPreview() }
+            return
+        }
+        startSweep(fineAround = null, quiet = false)
     }
 
-    /** Ziel hat sich bewegt: Messbereich nachführen (Dauer-Autofokus stellt selbst nach). */
-    private fun updateAfRegion(vx: Float, vy: Float) {
-        afRegion = regionFor(vx, vy) ?: return
-        afSentX = vx
-        afSentY = vy
-        afSentAt = SystemClock.elapsedRealtime()
-        if (macro) triggerAf() else if (!awaitLock) bg?.post { startPreview() }
+    private fun linspace(a: Float, b: Float, n: Int) = FloatArray(n) { a + (b - a) * it / (n - 1) }
+
+    private fun startSweep(fineAround: Float?, quiet: Boolean) {
+        val steps = when {
+            fineAround != null -> {
+                val r = if (quiet) 0.35f else max(0.5f, maxDiopter / 12f)
+                linspace(max(0f, fineAround - r), min(maxDiopter, fineAround + r), if (quiet) 5 else 7)
+            }
+            macro -> linspace(maxDiopter * 0.25f, maxDiopter, 10)
+            // Grob: dicht bei „fern“ (kleine Dioptrien), dort ist die Schärfentiefe am engsten verteilt
+            else -> FloatArray(12) { i -> val t = i / 11f; t * t * maxDiopter }
+        }
+        sweep = Sweep(steps, fineAround != null, quiet, focusDiopter)
+        focusMode = FocusMode.SWEEP
+        focusDiopter = steps[0]
+        sweepX = focusView.fx
+        sweepY = focusView.fy
+        if (!quiet) focusView.state = FocusView.State.SEARCHING
+        bg?.post { startPreview() }
+    }
+
+    /** Pro Vorschaubild: Schärfe messen, nächste Stufe anfahren. */
+    private fun sweepFrame() {
+        val sw = sweep ?: return
+        if (busy) return
+        if (sw.wait < SWEEP_WAIT) {
+            sw.wait++
+            return
+        }
+        sw.score[sw.i] = measureSharpness(focusView.fx, focusView.fy)
+        sw.i++
+        sw.wait = 0
+        if (sw.i < sw.steps.size) {
+            focusDiopter = sw.steps[sw.i]
+            bg?.post { startPreview() }
+            return
+        }
+        // Auswertung: bestes Ergebnis, mit Parabel verfeinert
+        var bi = 0
+        for (i in sw.score.indices) if (sw.score[i] > sw.score[bi]) bi = i
+        var best = sw.steps[bi]
+        if (bi in 1 until sw.steps.size - 1) {
+            val l = sw.score[bi - 1]
+            val c = sw.score[bi]
+            val r = sw.score[bi + 1]
+            val den = l - 2 * c + r
+            if (den < 0f) {
+                val off = (0.5f * (l - r) / den).coerceIn(-0.5f, 0.5f)
+                best += off * (sw.steps[bi + 1] - sw.steps[bi])
+            }
+        }
+        best = best.coerceIn(0f, maxDiopter)
+        sweep = null
+        if (!sw.fine) {
+            startSweep(fineAround = best, quiet = sw.quiet)
+            return
+        }
+        focusDiopter = best
+        focusMode = FocusMode.LOCKED
+        lastSweepAt = SystemClock.elapsedRealtime()
+        pendingTrackStart = true
+        bg?.post { startPreview() }
+        focusView.state = FocusView.State.SHARP
+        if (!sw.quiet) {
+            showStatus("Fokus ${distText(best)}")
+            status.postDelayed({ if (!busy) showStatus(null) }, 1200)
+        }
+    }
+
+    /** Kontrast (Gradientenenergie) in einem Feld um den Punkt, unabhängig von der Helligkeit. */
+    private fun measureSharpness(fx: Float, fy: Float): Float {
+        val tw = texture.width
+        val th = texture.height
+        var b = sweepBmp
+        if (b == null || b.width != tw || b.height != th) {
+            b = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888)
+            sweepBmp = b
+        }
+        texture.getBitmap(b)
+        val n = max(48, (focusView.size * 0.8f).toInt())
+        val x0 = (fx.toInt() - n / 2).coerceIn(0, tw - n)
+        val y0 = (fy.toInt() - n / 2).coerceIn(0, th - n)
+        if (sweepPx.size != n * n) sweepPx = IntArray(n * n)
+        b.getPixels(sweepPx, 0, n, x0, y0, n, n)
+        val g = IntArray(n * n)
+        Tracker.gray(sweepPx, g)
+        var e = 0.0
+        var sum = 0.0
+        for (y in 1 until n - 1) {
+            val row = y * n
+            for (x in 1 until n - 1) {
+                val i = row + x
+                val gx = g[i + 1] - g[i - 1]
+                val gy = g[i + n] - g[i - n]
+                e += (gx * gx + gy * gy).toDouble()
+                sum += g[i]
+            }
+        }
+        val mean = sum / ((n - 2) * (n - 2)) + 8.0
+        return (e / (mean * mean)).toFloat()
     }
 
     private fun clearFocusPoint() {
         focusView.hide()
         tracker.stop()
+        sweep = null
         pendingTrackStart = false
-        awaitLock = false
         afRegion = null
-        afMode = if (macro) CaptureRequest.CONTROL_AF_MODE_MACRO else CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        if (focusMode != FocusMode.MANUAL) focusMode = FocusMode.AUTO
         bg?.post { startPreview() }
     }
 
     private fun resetFocus() {
         macro = false
         updateChips()
+        focusMode = FocusMode.AUTO
+        mfRow.visibility = View.GONE
         clearFocusPoint()
         showStatus("Autofokus")
         status.postDelayed({ if (!busy) showStatus(null) }, 1000)
@@ -829,15 +976,41 @@ class MainActivity : Activity() {
         macro = !macro
         updateChips()
         focusView.macro = macro
-        if (macro) {
-            if (focusView.shown) setFocusPoint(focusView.fx, focusView.fy)
-            else setFocusPoint(texture.width / 2f, texture.height / 2f)
-        } else if (focusView.shown) setFocusPoint(focusView.fx, focusView.fy) else clearFocusPoint()
+        if (focusView.shown) setFocusPoint(focusView.fx, focusView.fy)
+        else if (macro) setFocusPoint(texture.width / 2f, texture.height / 2f)
+    }
+
+    /** Manueller Fokus: Regler 0 = nah … 1000 = unendlich. */
+    private fun setManualFocus(p: Int) {
+        sweep = null
+        focusMode = FocusMode.MANUAL
+        val t = 1f - p / 1000f
+        focusDiopter = t * t * maxDiopter
+        mfLabel.text = "Fokus: ${distText(focusDiopter)}"
+        if (focusView.shown) focusView.state = FocusView.State.SHARP
+        bg?.post { startPreview() }
+    }
+
+    private fun toggleManual() {
+        if (mfRow.visibility == View.VISIBLE) {
+            mfRow.visibility = View.GONE
+            if (focusMode == FocusMode.MANUAL) {
+                focusMode = if (focusView.shown) FocusMode.LOCKED else FocusMode.AUTO
+                if (focusView.shown) startSweep(null, false) else bg?.post { startPreview() }
+            }
+        } else {
+            mfRow.visibility = View.VISIBLE
+            val t = kotlin.math.sqrt((focusDiopter / maxDiopter).coerceIn(0f, 1f))
+            mfSeek.progress = ((1f - t) * 1000).roundToInt()
+            setManualFocus(mfSeek.progress)
+        }
+        updateChips()
     }
 
     /** Pro Vorschaubild: Ziel im verkleinerten Bild suchen und Rahmen nachführen. */
     private fun trackFrame() {
         if (!focusView.shown || draggingFocus || busy || device == null) return
+        if (sweep != null) return // während des Durchlaufs ändert sich die Schärfe – nicht verfolgen
         val tw = texture.width / 4
         val th = texture.height / 4
         if (tw < 40 || th < 40) return
@@ -861,34 +1034,17 @@ class MainActivity : Activity() {
             focusView.state = FocusView.State.LOST
             return
         }
-        if (focusView.state == FocusView.State.LOST) focusView.state = lastAfUi ?: FocusView.State.SEARCHING
+        if (focusView.state == FocusView.State.LOST) focusView.state = FocusView.State.SHARP
         val nx = tracker.x * 4f + 2f
         val ny = tracker.y * 4f + 2f
         focusView.show(nx, ny)
-        val moved = kotlin.math.hypot(nx - afSentX, ny - afSentY)
-        val now = SystemClock.elapsedRealtime()
-        if ((moved > dp(18f) && now - afSentAt > 150) || (macro && moved > dp(40f) && now - afSentAt > 800)) {
-            updateAfRegion(nx, ny)
-        }
-    }
+        afRegion = regionFor(nx, ny)
 
-    private fun triggerAf() {
-        val handler = bg ?: return
-        handler.post {
-            val s = session ?: return@post
-            val ps = previewSurface ?: return@post
-            try {
-                s.stopRepeating()
-                val t = baseRequest(CameraDevice.TEMPLATE_PREVIEW)
-                t.addTarget(ps)
-                t.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
-                t.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_CANCEL)
-                s.capture(t.build(), null, handler)
-                t.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
-                s.capture(t.build(), null, handler)
-                startPreview()
-            } catch (_: Exception) {
-            }
+        // Nachprüfen: alle paar Sekunden fein um die aktuelle Entfernung
+        val now = SystemClock.elapsedRealtime()
+        if (focusMode == FocusMode.LOCKED && now - lastSweepAt > RECHECK_MS) {
+            lastSweepAt = now
+            startSweep(fineAround = focusDiopter, quiet = true)
         }
     }
 
@@ -902,6 +1058,19 @@ class MainActivity : Activity() {
             showStatus("KI lädt noch – einen Moment")
             return
         }
+        sweep?.let { sw ->
+            // stilles Nachprüfen einfach abbrechen und alte Entfernung behalten
+            if (sw.quiet) {
+                sweep = null
+                focusDiopter = sw.restore
+                focusMode = FocusMode.LOCKED
+            }
+        }
+        if (sweep != null) {
+            showStatus("Stellt noch scharf – einen Moment")
+            status.postDelayed({ if (!busy) showStatus(null) }, 1200)
+            return
+        }
         busy = true
         shutter.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
         shutter.mode = ShutterView.Mode.CAPTURING
@@ -909,9 +1078,12 @@ class MainActivity : Activity() {
 
         val z = zoom
         val withRaw = z >= 2f && rawReader != null
-        val count = if (withRaw) 12 else if (z >= 2f) 16 else 8
+        // RAW: so viele Bilder, wie ins Speicherbudget passen (8 bis 30)
+        val region = Region.compute(yuvSize.width, yuvSize.height, z)
+        val rawBytes = region.rw.toLong() * region.rh * 2
+        val count = if (withRaw) (RAW_BUDGET / rawBytes).toInt().coerceIn(8, 30) else if (z >= 2f) 16 else 8
         val rotation = (sensorOrientation + deviceOrientation) % 360
-        val col = Collector(Region.compute(yuvSize.width, yuvSize.height, z), count, z, rotation, withRaw)
+        val col = Collector(region, count, z, rotation, withRaw)
         collecting = col
         showStatus(null)
         showHold("Ruhig halten …")
@@ -937,7 +1109,12 @@ class MainActivity : Activity() {
                 }
                 b.set(CaptureRequest.NOISE_REDUCTION_MODE, nrMode)
                 val req = b.build()
-                s.captureBurst(List(count) { req }, object : CameraCaptureSession.CaptureCallback() {
+                // Spätere Bilder der Serie nur noch als RAW (spart Speicher)
+                val rawOnly = if (withRaw) {
+                    b.removeTarget(reader!!.surface)
+                    b.build()
+                } else req
+                s.captureBurst(List(count) { if (it < col.yuvCount) req else rawOnly }, object : CameraCaptureSession.CaptureCallback() {
                     override fun onCaptureCompleted(
                         session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult,
                     ) {
@@ -951,7 +1128,8 @@ class MainActivity : Activity() {
             }
             handler.postDelayed({
                 if (collecting === col && !col.done) {
-                    if (col.complete() >= 4) finishBurst(col) else failShot("Zu wenige Bilder bekommen")
+                    val enough = if (col.withRaw) col.raw.size >= 6 && col.yuv.size >= 3 else col.yuv.size >= 4
+                    if (enough) finishBurst(col) else failShot("Zu wenige Bilder bekommen")
                 }
             }, 5000)
         }
@@ -960,7 +1138,7 @@ class MainActivity : Activity() {
     private fun onBurstImage(col: Collector) {
         val n = col.complete()
         runOnUiThread { if (shutter.mode == ShutterView.Mode.CAPTURING) shutter.progress = n.toFloat() / col.count }
-        if (n >= col.count) finishBurst(col)
+        if (col.finished()) finishBurst(col)
     }
 
     private fun showHold(text: String?) = runOnUiThread {
@@ -1012,9 +1190,11 @@ class MainActivity : Activity() {
         startPreview()
         val a = ai!!
 
-        val keys = if (col.withRaw) col.yuv.keys.filter { it in col.raw } else col.yuv.keys.toList()
-        val frames: MutableList<Frame?> = keys.map { col.yuv[it] }.toMutableList()
-        val raws: MutableList<ShortArray?>? = if (col.withRaw) keys.map { col.raw[it] }.toMutableList() else null
+        val yuvKeys = col.yuv.keys.toList()
+        val rawKeys = col.raw.keys.toList()
+        val keys = yuvKeys
+        val frames: MutableList<Frame?> = yuvKeys.map { col.yuv[it] }.toMutableList()
+        val raws: MutableList<ShortArray?>? = if (col.withRaw) rawKeys.map { col.raw[it] }.toMutableList() else null
         val result = keys.firstNotNullOfOrNull { col.results[it] } ?: col.results.values.firstOrNull()
         col.yuv.clear()
         col.raw.clear()
@@ -1044,12 +1224,15 @@ class MainActivity : Activity() {
                 if (raws != null && rawParamsBase != null) {
                     try {
                         val geo = RawSR.Geo(r.x0, r.y0, r.rw, r.rh, r.cx, r.cy, r.cw, r.ch)
-                        val out = RawSR.run(raws, geo, rawParams(result), res.refIdx, res.refY, res.mergedY, 4) {
+                        // RAW-Bild zum selben Zeitpunkt wie das YUV-Referenzbild
+                        val refTs = yuvKeys[res.refIdx]
+                        val rawRef = rawKeys.indices.minByOrNull { kotlin.math.abs(rawKeys[it] - refTs) } ?: 0
+                        val out = RawSR.run(raws, geo, rawParams(result), rawRef, res.refY, res.mergedY, 4) {
                             showStatus(it)
                         }
                         real = SuperRes.toBitmap(out.y, res.chroma, r, out.u, out.wo, out.ho)
                         res.merged.recycle()
-                        srNote = " · RAW ${fmt(out.u)}×"
+                        srNote = " · ${out.used} RAW-Bilder · ${fmt(out.u)}×"
                         half = true
                     } catch (e: OutOfMemoryError) {
                         srNote = " · ohne RAW (Speicher)"
@@ -1140,5 +1323,8 @@ class MainActivity : Activity() {
         private const val FG = 0xFFEDEDED.toInt()
         private const val MUTED = 0xFF8A8A8A.toInt()
         private const val MAX_AI_INPUT = 1024
+        private const val SWEEP_WAIT = 2
+        private const val RAW_BUDGET = 150_000_000L
+        private const val RECHECK_MS = 5000L
     }
 }

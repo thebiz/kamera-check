@@ -39,6 +39,22 @@ object RawSR {
 
     private const val MAX_OUT_PIXELS = 8_400_000f
 
+    /** Kachelweises Ausrichten (kann zum Testen abgeschaltet werden). */
+    var localAlign = true
+
+    /** Kachelgröße in halbauflösenden Pixeln (= 2× in RAW-Pixeln). */
+    private const val TILE = 48
+
+    /**
+     * Verschiebungsfeld eines Bildes (RAW-Pixel): für jede Kachelmitte dx, dy und ein
+     * Gewicht (Bewegung/Fehlausrichtung → kleines Gewicht). Bild(p) ≈ Referenz(p + d).
+     */
+    class Field(val nx: Int, val ny: Int, val dx: FloatArray, val dy: FloatArray, val wt: FloatArray) {
+        companion object {
+            fun constant(dx: Float, dy: Float) = Field(1, 1, floatArrayOf(dx), floatArrayOf(dy), floatArrayOf(1f))
+        }
+    }
+
     fun run(
         raws: MutableList<ShortArray?>,
         g: Geo,
@@ -63,12 +79,19 @@ object RawSR {
         val refHalfSmall = Align.downscale4(refHalf, hw, hh)
 
         val shifts = HashMap<Int, FloatArray>()
+        val fields = HashMap<Int, Field>()
         shifts[refIdx] = floatArrayOf(0f, 0f, 0f)
+        fields[refIdx] = Field.constant(0f, 0f)
+        var n = 0
         for (i in raws.indices) {
             if (i == refIdx || raws[i] == null) continue
+            n++
+            progress("RAW: richte aus … $n/${raws.size - 1}")
             val half = halfLuma(raws[i]!!, w, h, p, scale)
             val s = Align.align(refHalf, refHalfSmall, half, hw, hh)
             shifts[i] = floatArrayOf(s[0] * 2f, s[1] * 2f, s[2])
+            fields[i] = if (localAlign) localField(refHalf, half, hw, hh, s[0], s[1])
+            else Field.constant(s[0] * 2f, s[1] * 2f)
         }
         val costs = shifts.filterKeys { it != refIdx }.values.map { it[2] }.sorted()
         val median = if (costs.isEmpty()) 0f else costs[costs.size / 2]
@@ -110,8 +133,7 @@ object RawSR {
                 Thread {
                     for (k in good) {
                         val raw = raws[k] ?: continue
-                        val s = shifts[k]!!
-                        splatChannel(raw, w, h, g, c, color, p, scale, s[0] + ox, s[1] + oy, u, rad, inv2s2, acc, wt, wo, b0, b1)
+                        splatChannel(raw, w, h, g, c, color, p, scale, fields[k]!!, ox, oy, u, rad, inv2s2, acc, wt, wo, b0, b1)
                     }
                 }.also { it.start() }
             }
@@ -225,40 +247,209 @@ object RawSR {
 
     private val EXP_LUT = FloatArray(1025) { exp(-it / 64f) }
 
+    /** Lokales Verschiebungsfeld um die globale Verschiebung (gx, gy in Halbpixeln). */
+    private fun localField(ref: ByteArray, f: ByteArray, hw: Int, hh: Int, gx: Float, gy: Float): Field {
+        val nx = max(1, hw / TILE)
+        val ny = max(1, hh / TILE)
+        val dxA = FloatArray(nx * ny)
+        val dyA = FloatArray(nx * ny)
+        val cost = FloatArray(nx * ny)
+        val texture = FloatArray(nx * ny)
+        val R = 3
+        val cgx = Math.round(gx)
+        val cgy = Math.round(gy)
+        val size = 2 * R + 1
+        val sad = Array(size) { LongArray(size) }
+        for (ty in 0 until ny) for (tx in 0 until nx) {
+            val x0 = tx * hw / nx
+            val x1 = (tx + 1) * hw / nx
+            val y0 = ty * hh / ny
+            val y1 = (ty + 1) * hh / ny
+            // Rand so wählen, dass ref(p + d) im Bild bleibt
+            val m = R + max(abs(cgx), abs(cgy)) + 1
+            val xa = max(x0, m)
+            val xb = min(x1, hw - m)
+            val ya = max(y0, m)
+            val yb = min(y1, hh - m)
+            val k = ty * nx + tx
+            if (xb - xa < 8 || yb - ya < 8) {
+                dxA[k] = gx; dyA[k] = gy; cost[k] = -1f
+                continue
+            }
+            // Struktur im Referenzstück (flache Flächen lassen sich nicht ausrichten)
+            var tex = 0L
+            var cnt = 0
+            for (y in ya until yb step 2) for (x in xa until xb - 1 step 2) {
+                val i = y * hw + x
+                tex += abs((ref[i + 1].toInt() and 255) - (ref[i].toInt() and 255))
+                cnt++
+            }
+            texture[k] = tex.toFloat() / max(1, cnt)
+            for (a in -R..R) for (b in -R..R) {
+                val ddx = cgx + b
+                val ddy = cgy + a
+                var sum = 0L
+                for (y in ya until yb step 2) {
+                    val ro = (y + ddy) * hw + ddx
+                    val fo = y * hw
+                    for (x in xa until xb step 2) {
+                        sum += abs((ref[ro + x].toInt() and 255) - (f[fo + x].toInt() and 255))
+                    }
+                }
+                sad[a + R][b + R] = sum
+            }
+            var ai = R
+            var bi = R
+            for (a in 0 until size) for (b in 0 until size) if (sad[a][b] < sad[ai][bi]) { ai = a; bi = b }
+            val subX = if (bi in 1 until size - 1) parab(sad[ai][bi - 1], sad[ai][bi], sad[ai][bi + 1]) else 0f
+            val subY = if (ai in 1 until size - 1) parab(sad[ai - 1][bi], sad[ai][bi], sad[ai + 1][bi]) else 0f
+            dxA[k] = cgx + (bi - R) + subX
+            dyA[k] = cgy + (ai - R) + subY
+            cost[k] = sad[ai][bi].toFloat() / max(1, cnt)
+        }
+
+        // Flache Kacheln → globale Verschiebung; Ausreißer → Median der Nachbarn
+        val dxO = dxA.copyOf()
+        val dyO = dyA.copyOf()
+        for (ty in 0 until ny) for (tx in 0 until nx) {
+            val k = ty * nx + tx
+            if (cost[k] < 0f || texture[k] < 2.0f) {
+                dxO[k] = gx; dyO[k] = gy
+                continue
+            }
+            val nbx = ArrayList<Float>()
+            val nby = ArrayList<Float>()
+            for (a in -1..1) for (b in -1..1) {
+                val yy = ty + a
+                val xx = tx + b
+                if (yy !in 0 until ny || xx !in 0 until nx || (a == 0 && b == 0)) continue
+                val j = yy * nx + xx
+                if (cost[j] >= 0f && texture[j] >= 2.0f) { nbx += dxA[j]; nby += dyA[j] }
+            }
+            if (nbx.size >= 3) {
+                nbx.sort(); nby.sort()
+                val mx = nbx[nbx.size / 2]
+                val my = nby[nby.size / 2]
+                if (abs(dxA[k] - mx) > 0.75f || abs(dyA[k] - my) > 0.75f) { dxO[k] = mx; dyO[k] = my }
+            }
+        }
+
+        // Glätten: Mittel mit den Nachbarkacheln (Drehung/Verzerrung ändern sich nur langsam)
+        val dxS = FloatArray(nx * ny)
+        val dyS = FloatArray(nx * ny)
+        for (ty in 0 until ny) for (tx in 0 until nx) {
+            var sx = 0f
+            var sy = 0f
+            var c = 0f
+            for (a in -1..1) for (b in -1..1) {
+                val yy = ty + a
+                val xx = tx + b
+                if (yy !in 0 until ny || xx !in 0 until nx) continue
+                val wgt = if (a == 0 && b == 0) 2f else 1f
+                val j = yy * nx + xx
+                sx += dxO[j] * wgt
+                sy += dyO[j] * wgt
+                c += wgt
+            }
+            dxS[ty * nx + tx] = sx / c
+            dyS[ty * nx + tx] = sy / c
+        }
+        // Nur echte lokale Abweichungen übernehmen – sonst ist die globale Schätzung genauer
+        for (k in dxO.indices) {
+            val ddx = dxS[k] - gx
+            val ddy = dyS[k] - gy
+            val dev = kotlin.math.hypot(ddx, ddy)
+            val t = ((dev - 0.12f) / 0.25f).coerceIn(0f, 1f)
+            dxO[k] = gx + ddx * t
+            dyO[k] = gy + ddy * t
+        }
+
+        // Gewicht: Kacheln mit auffällig großem Restfehler (Bewegung) zählen wenig
+        val valid = cost.filter { it >= 0f }.sorted()
+        val med = if (valid.isEmpty()) 0f else valid[valid.size / 2]
+        val wt = FloatArray(nx * ny) { k ->
+            if (cost[k] < 0f) 1f else if (cost[k] > med * 2.2f + 4f) 0.1f else 1f
+        }
+        // Halbpixel → RAW-Pixel
+        for (k in dxO.indices) { dxO[k] *= 2f; dyO[k] *= 2f }
+        return Field(nx, ny, dxO, dyO, wt)
+    }
+
+    private fun parab(l: Long, c: Long, r: Long): Float {
+        val den = (l - 2 * c + r).toFloat()
+        if (den <= 0f) return 0f
+        return ((l - r).toFloat() / (2f * den)).coerceIn(-0.5f, 0.5f)
+    }
+
     /** Alle Abtastwerte einer Farbe eines Bildes auf das feine Raster verteilen (nur Zeilen b0 until b1). */
     private fun splatChannel(
         raw: ShortArray, w: Int, h: Int, g: Geo, c: Int, color: IntArray, p: Params, scale: FloatArray,
-        dx: Float, dy: Float, u: Float, rad: Int, inv2s2: Float,
+        fld: Field, ox: Float, oy: Float, u: Float, rad: Int, inv2s2: Float,
         acc: FloatArray, wt: FloatArray, wo: Int, b0: Int, b1: Int,
     ) {
         val wx = FloatArray(2 * rad + 2)
         val wy = FloatArray(2 * rad + 2)
+        val nx = fld.nx
+        val ny = fld.ny
+        val rdx = FloatArray(nx)
+        val rdy = FloatArray(nx)
+        val rwt = FloatArray(nx)
+        // Kachelmitten in RAW-Pixeln: Halbpixel-Kachel k deckt [k*hw/nx, (k+1)*hw/nx)
+        val tileW = w.toFloat() / nx
+        val tileH = h.toFloat() / ny
+        var dyMin = Float.MAX_VALUE
+        var dyMax = -Float.MAX_VALUE
+        for (v in fld.dy) { dyMin = min(dyMin, v); dyMax = max(dyMax, v) }
+
         for (rowPar in 0..1) for (colPar in 0..1) {
             val pos = rowPar * 2 + colPar
             if (color[pos] != c) continue
             var j = rowPar
             while (j < h) {
-                val oyc = (g.y0 + j + dy - g.cy + 0.5f) * u - 0.5f
-                val iy0 = floor(oyc).toInt() - rad + 1
-                val iy1 = floor(oyc).toInt() + rad
-                if (iy1 < b0 || iy0 >= b1) {
+                // Grob prüfen, ob diese Zeile das eigene Band überhaupt trifft
+                val oLo = (g.y0 + j + dyMin + oy - g.cy + 0.5f) * u - 0.5f
+                val oHi = (g.y0 + j + dyMax + oy - g.cy + 0.5f) * u - 0.5f
+                if (floor(oHi).toInt() + rad < b0 || floor(oLo).toInt() - rad + 1 >= b1) {
                     j += 2
                     continue
                 }
-                var nY = 0
-                for (t in iy0..iy1) {
-                    val d = t - oyc
-                    val q = (d * d * inv2s2 * 64f).toInt()
-                    wy[nY++] = if (q < 1024) EXP_LUT[q] else 0f
+                // Verschiebungsfeld für diese Zeile (senkrecht interpoliert)
+                val fy = ((j + 0.5f) / tileH - 0.5f).coerceIn(0f, (ny - 1).toFloat())
+                val ky = min(ny - 2, fy.toInt()).coerceAtLeast(0)
+                val ay = if (ny > 1) fy - ky else 0f
+                for (kx in 0 until nx) {
+                    val i0 = ky * nx + kx
+                    val i1 = if (ny > 1) i0 + nx else i0
+                    rdx[kx] = fld.dx[i0] * (1 - ay) + fld.dx[i1] * ay
+                    rdy[kx] = fld.dy[i0] * (1 - ay) + fld.dy[i1] * ay
+                    rwt[kx] = fld.wt[i0] * (1 - ay) + fld.wt[i1] * ay
                 }
                 val row = j * w
                 var i = colPar
                 while (i < w) {
+                    // waagerecht interpolieren
+                    val fx = ((i + 0.5f) / tileW - 0.5f).coerceIn(0f, (nx - 1).toFloat())
+                    val kx = min(nx - 2, fx.toInt()).coerceAtLeast(0)
+                    val ax = if (nx > 1) fx - kx else 0f
+                    val k1 = if (nx > 1) kx + 1 else kx
+                    val dx = rdx[kx] * (1 - ax) + rdx[k1] * ax + ox
+                    val dy = rdy[kx] * (1 - ax) + rdy[k1] * ax + oy
+                    val fw = rwt[kx] * (1 - ax) + rwt[k1] * ax
+
+                    val oyc = (g.y0 + j + dy - g.cy + 0.5f) * u - 0.5f
+                    val iy0 = floor(oyc).toInt() - rad + 1
+                    val iy1 = floor(oyc).toInt() + rad
                     val oxc = (g.x0 + i + dx - g.cx + 0.5f) * u - 0.5f
                     val ix0 = floor(oxc).toInt() - rad + 1
                     val ix1 = floor(oxc).toInt() + rad
-                    if (ix1 >= 0 && ix0 < wo) {
+                    if (iy1 >= b0 && iy0 < b1 && ix1 >= 0 && ix0 < wo) {
                         val v = value(raw, row + i, pos, p, scale)
+                        var nY = 0
+                        for (t in iy0..iy1) {
+                            val d = t - oyc
+                            val q = (d * d * inv2s2 * 64f).toInt()
+                            wy[nY++] = if (q < 1024) EXP_LUT[q] * fw else 0f
+                        }
                         var nX = 0
                         for (t in ix0..ix1) {
                             val d = t - oxc
@@ -270,9 +461,9 @@ object RawSR {
                             val wyv = wy[a++]
                             if (ty < b0 || ty >= b1 || wyv == 0f) continue
                             val base = ty * wo
-                            var b = 0
+                            var bb = 0
                             for (tx in ix0..ix1) {
-                                val wv = wx[b++] * wyv
+                                val wv = wx[bb++] * wyv
                                 if (tx < 0 || tx >= wo || wv == 0f) continue
                                 acc[base + tx] += wv * v
                                 wt[base + tx] += wv
