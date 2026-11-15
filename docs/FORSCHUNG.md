@@ -22,7 +22,7 @@ herausholen, statt es nur hübsch zu erfinden.
 
 ---
 
-## 2. Die Rechenkette (Version 1.6)
+## 2. Die Rechenkette (Version 1.7)
 
 Ein Druck auf den Auslöser löst diese Schritte aus:
 
@@ -296,6 +296,41 @@ Simulation (`tools/sim/AlignTest.kt`, Fotos aus der Hand):
 Außerdem: Ausschnitt-Rahmen wird relativ gezogen (Finger verdeckt nichts, Johns Hinweis),
 Diagnose-Kacheln beim Import zeigen 300 Pixel vergrößert, damit Unterschiede sichtbar sind.
 
+**Zweiter 50-MP-Import (Version 1.6):** ![Import 1.6](diagnose_import_v1-6.jpg)
+
+Ausrichten gelöst: alle 5 Fotos passen (Restfehler 1,9–2,2, Grenze 6), keine Doppelbilder.
+Aber: 50 MP ≈ 12 MP, und gegenüber dem, was das Handy selbst liefert, keine sichtbare
+Verbesserung. Johns Fazit: Die Bildverbesserung selbst muss besser werden.
+
+**Version 1.7 – KI mit bekannter Unschärfe (DPIR):** Die bisherige KI (Real-ESRGAN) schaut
+auf ein Bild und rät – daher Plastikflächen und Striche statt Buchstaben. Neu ist ein
+Verfahren, das **Physik und KI abwechselt** (Zhang et al. 2021, „Plug-and-Play Image
+Restoration with Deep Denoiser Prior“):
+
+1. *Physik-Schritt*: Welches scharfe Bild ergibt – mit **unserer gemessenen Unschärfe**
+   (Messung an Schrift, Kalibrierprofil) verwischt – genau das Foto? Exakt lösbar im Frequenzraum.
+2. *KI-Schritt*: ein Entrausch-Netz (DRUNet) entfernt die Störungen, die dabei entstehen.
+   Es weiß, wie saubere Bilder aussehen, erfindet aber keine Formen.
+
+So werden Kalibrierung und Messung zum ersten Mal direkt Teil der KI.
+Simulation am PC (`tools/sim/dpir_sim.py`, Kleinschrift + „500 g“, Unschärfe σ = 1,2 px):
+
+| Verfahren | Rauschen 1/255 | Rauschen 3/255 |
+|---|---|---|
+| unscharf | 19,4 dB | 19,3 dB |
+| Richardson-Lucy (bisher) | 21,4 dB | 20,9 dB |
+| RL gebremst (1.5) | 21,1 dB | 20,8 dB |
+| **DPIR, 8 Durchgänge** | **24,1 dB** | **22,3 dB** |
+| DPIR, 4 Durchgänge | 23,8 dB | 22,3 dB |
+
+![Vergleich: scharf · unscharf · RL gebremst · DPIR](dpir_vergleich.png)
+
+*Von links: Vorlage · unscharf + Rauschen · bisher (RL gebremst) · DPIR.* Die Kleinschrift
+wird lesbar statt körnig. Auf dem Handy: 3 Durchgänge (kaum schlechter: 22,65 vs. 22,79 dB),
+Kacheln 256 × 256 mit 24 px Umfeld (Kacheln kosten nichts: 22,71 dB), Mitte zuerst, Zeitbudget
+2 Minuten (stark: 5); die Kotlin-Umsetzung stimmt mit der PC-Referenz auf 0,000002 überein.
+Ersetzt die Allzweck-KI; diese bleibt als Rückfall, falls das Modell nicht lädt.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -310,6 +345,7 @@ Diagnose-Kacheln beim Import zeigen 300 Pixel vergrößert, damit Unterschiede s
 | **Simulation ersetzt nicht das echte Foto** – Grafiker-Augen finden, was Zahlen übersehen | daraus: Version 1.0 setzt auf Physik statt Raten |
 | Bei ebenem Motiv muss alles gleich scharf sein; Ungleichmäßigkeit = Rechenfehler | Johns Hinweis; jetzt automatische Prüfung |
 | Die eigene Messmethode hatte einen festen Fehler (+0,5 px²) – sichtbar erst mit bekannten Testkanten | Kalibrier-Simulation, Version 1.1 |
+| Eine KI, der man die gemessene Unschärfe mitgibt, schlägt sowohl reine Physik als auch eine ratende KI – Messung und Kalibrierung werden so erst richtig wertvoll | PC-Simulation, Version 1.7 (+2,6 dB gegenüber Richardson-Lucy) |
 | Mehr Megapixel auf dem Datenblatt sind nicht automatisch mehr Detail – der Vergleich „50 MP gegen auf 12 MP verkleinert“ gehört in jede Messung | Import-Diagnose 1.5 |
 | Mitteln hilft nur, wenn die Bilder auf Bruchteile eines Pixels übereinanderliegen – sonst wird es weicher als ein Einzelbild | Diagnosebild 1.3 (Kachel 3 weicher als Kachel 2) |
 | Das Rohmaterial entscheidet: Eine gute Rechenkette auf zusammengefassten 12-MP-Pixeln verliert gegen die einfache Vorschau aus der hochauflösenden Bildmitte | Diagnosebild, Version 1.2.1 |
@@ -346,6 +382,7 @@ Diagnose-Kacheln beim Import zeigen 300 Pixel vergrößert, damit Unterschiede s
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.7 | KI-Entschärfen mit bekannter Unschärfe (DPIR/DRUNet) statt Allzweck-KI |
 | 1.6 | Import: Ausrichten bis ±400 px, Passprobe gegen Doppelbilder, Rahmen relativ ziehen |
 | 1.5 | 50-MP-Fotos der Xiaomi-Kamera importieren (automatisch, Teilen, Auswahl) mit Diagnosebild; 50-MP-Test; Entschärfen gebremst |
 | 1.4 | Kachelweises Ausrichten der Bildserie (zweistufig), unscharfe Bilder aussortiert, KI bei Schrift aus |

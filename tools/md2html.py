@@ -41,8 +41,9 @@ def embed(m):
     if not os.path.exists(path):
         return m.group(0)
     data = base64.b64encode(open(path, "rb").read()).decode()
-    return f'src="data:image/jpeg;base64,{data}"'
-body = re.sub(r'src="([^":]+\.jpe?g)"', embed, body)
+    mime = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+    return f'src="data:{mime};base64,{data}"'
+body = re.sub(r'src="([^":]+\.(?:jpe?g|png))"', embed, body)
 title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), "Forschung")
 html = f"""<!doctype html>
 <html lang="de"><head><meta charset="utf-8">
