@@ -445,6 +445,15 @@ derselben Stelle; **Kalibrieren für 50 MP**: fünf Xiaomi-Fotos des iPad-Muster
 die App findet das Muster selbst und misst die Unschärfe in Pixeln des 50-MP-Fotos – genutzt
 beim Import je Bildstelle (Profil² + Zusatz² dieses Fotos), wie beim RAW-Weg.
 
+**Erste 50-MP-Kalibrierung:** Mitte 4,19 px, Ecken 3,59–4,48 px, Farben bis 43 % abweichend – Ecken
+teils schärfer als die Mitte. Beim Import mit 10× ergab das **massive Überschärfung** mit hellen
+Rändern und Mustern („ganz katastrophal“), denn am selben Foto maß die Schrift nur ≈ 1 px.
+Ursache vermutlich: Verwacklung bei 1,5 m Abstand aus der Hand und Xiaomis Bildbearbeitung
+(Tonkurve, Schärfung), die die Kantenmessung am Muster anders beeinflusst als an Schrift.
+**Version 1.11.1:** Das Profil liefert nur noch den *Verlauf* über das Bild (Faktor 0,75–1,35
+gegenüber der Ausschnittsmitte); die *Stärke* misst die App in jedem Foto selbst. Profil löschbar.
+Lehre: **absolute Kalibrierwerte nie ungeprüft übernehmen – gegen die Messung im Bild absichern.**
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -496,6 +505,7 @@ beim Import je Bildstelle (Profil² + Zusatz² dieses Fotos), wie beim RAW-Weg.
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.11.1 | 50-MP-Profil nur noch als Verlauf (Stärke aus dem Foto), Profil löschbar |
 | 1.11 | Kalibrieren für 50 MP, Farben vom Original, Physik-Schärfe an kräftigen Kanten, Echt ⇄ KI |
 | 1.10 | „Entschärfen“ heißt jetzt „Schärfe zurückholen“ (Johns Wunsch); 50-MP-Hinweis mit Pro-Modus und Format 3:4 |
 | 1.9.3 | Kamera-Freigaben im System lesen; Fehlalarm 50 MP korrigiert |

@@ -2098,6 +2098,7 @@ class MainActivity : Activity() {
         if (profile != null) m.menu.add(0, 4, 1, "Kalibrierung ansehen")
         m.menu.add(0, 8, 1, if (profile50 != null) "50 MP neu kalibrieren" else "Für 50 MP kalibrieren")
         if (profile50 != null) m.menu.add(0, 9, 1, "50-MP-Profil ansehen")
+        if (profile50 != null) m.menu.add(0, 10, 1, "50-MP-Profil löschen")
         if (profile != null) m.menu.add(0, 2, 2, "Kalibrierung löschen")
         m.menu.add(0, 5, 3, if (diagOn) "Diagnosebild: an ✓" else "Diagnosebild: aus")
         m.menu.add(0, 6, 4, if (ispZoomOn) "Quelle: Kamera-Zoom ✓" else "Quelle: ganzes Sensorbild + RAW")
@@ -2115,6 +2116,12 @@ class MainActivity : Activity() {
                 3 -> startActivity(Intent(this, CheckActivity::class.java))
                 4 -> profile?.let { p -> showProfile(p, "Schärfeprofil", "Wird bei jedem Foto ab 2× genutzt.") }
                 8 -> askCalib50()
+                10 -> {
+                    File(filesDir, PROFILE50_FILE).delete()
+                    profile50 = null
+                    showStatus("50-MP-Profil gelöscht")
+                    status.postDelayed({ if (!busy) showStatus(null) }, 2500)
+                }
                 9 -> profile50?.let { p ->
                     showProfile(p, "50-MP-Schärfeprofil", "Wird beim Import von 50-MP-Fotos genutzt.", p.samples.map { where50(it.nx, it.ny) })
                 }
@@ -2523,8 +2530,12 @@ class MainActivity : Activity() {
                     writeProfile(PROFILE50_FILE, samples, null, date)
                     val p = SharpProfile(samples, null, null, date)
                     profile50 = p
+                    val center = samples.first().luma().average().toFloat()
+                    val warn = if (center > 2.5f) "\n\nHinweis: Die Werte sind hoch – vermutlich leicht verwackelt oder Xiaomis " +
+                        "Bildbearbeitung mitgemessen. Kein Problem: Die App nimmt aus dem Profil nur, wie die Schärfe über das " +
+                        "Bild verläuft (Mitte gegen Ecken). Wie stark sie schärft, misst sie in jedem Foto selbst." else ""
                     showProfile(p, "50-MP-Profil gespeichert ✓",
-                        notes.joinToString("\n") + "\n\nAb jetzt nutzt der Import von 50-MP-Fotos dieses Profil.",
+                        notes.joinToString("\n") + warn + "\n\nAb jetzt nutzt der Import von 50-MP-Fotos den Verlauf aus diesem Profil.",
                         samples.map { where50(it.nx, it.ny) })
                 }
             } catch (e: Throwable) {
@@ -2796,16 +2807,18 @@ class MainActivity : Activity() {
             val sigma50: ((Int, Int) -> FloatArray)? = p50?.let { prof ->
                 val uw = dims.uprightW.toFloat()
                 val uh = dims.uprightH.toFloat()
+                // Nur den VERLAUF über das Bild aus dem Profil nehmen; die Stärke misst jedes Foto selbst.
+                // (Erste 50-MP-Kalibrierung ergab ≈ 4 px statt ≈ 1 px → massive Überschärfung, Johns Test 15.11.)
                 val c0 = Calib.sigmaAt(prof.samples, (rect[0] + rect[2]) / 2f, (rect[1] + rect[3]) / 2f)
-                val ex2 = max(0f, sx * sx - c0[0] * c0[0])
-                val ey2 = max(0f, sy * sy - c0[1] * c0[1])
-                info += "50-MP-Profil aktiv (kalibriert ${prof.date}): hier ${fmt(c0[0])}/${fmt(c0[1])} px · Zusatz ${fmt(sqrt(ex2))}/${fmt(sqrt(ey2))} px"
+                info += "50-MP-Profil (kalibriert ${prof.date}) – nur Verlauf über das Bild, Stärke aus diesem Foto"
                 val fn: (Int, Int) -> FloatArray = { x, yy ->
                     // Ergebnisbild = innerer Ausschnitt, beginnt bei rect[0], rect[1] des Fotos
                     val nx = (rect[0] * uw + x) / uw
                     val ny = (rect[1] * uh + yy) / uh
                     val p = Calib.sigmaAt(prof.samples, nx, ny)
-                    floatArrayOf(sqrt(p[0] * p[0] + ex2), sqrt(p[1] * p[1] + ey2))
+                    val fx = (p[0] / max(0.1f, c0[0])).coerceIn(0.75f, 1.35f)
+                    val fy = (p[1] / max(0.1f, c0[1])).coerceIn(0.75f, 1.35f)
+                    floatArrayOf(sx * fx, sy * fy)
                 }
                 fn
             }
