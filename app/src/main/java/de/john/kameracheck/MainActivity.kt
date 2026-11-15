@@ -437,7 +437,8 @@ class MainActivity : Activity() {
         panel.addView(chips2, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8f) })
         normalControls += listOf(zoomLabel, seek, chips, chips2)
 
-        // Manueller Fokus: schwebt über der Vorschau, damit das Bedienfeld nicht zusammengedrückt wird
+        // Manueller Fokus: schwebt unten über der Vorschau, direkt über dem Zoomregler – dort ist der Daumen
+        // (Johns Wunsch 1.18.1; vorher oben, schlecht erreichbar)
         mfRow = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -465,8 +466,8 @@ class MainActivity : Activity() {
         mfScale.addView(mfSeek, LinearLayout.LayoutParams(0, -2, 1f))
         mfScale.addView(TextView(this).apply { text = "∞"; setTextColor(MUTED); textSize = 14f })
         mfRow.addView(mfScale, LinearLayout.LayoutParams(-1, -2))
-        previewBox.addView(mfRow, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply {
-            topMargin = dp(56f); leftMargin = dp(12f); rightMargin = dp(12f)
+        previewBox.addView(mfRow, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply {
+            bottomMargin = dp(12f); leftMargin = dp(12f); rightMargin = dp(12f)
         })
 
         // Auslöser-Zeile: Vorschaubild · Auslöser · Platzhalter
@@ -943,6 +944,7 @@ class MainActivity : Activity() {
     private class Sweep(val steps: FloatArray, val fine: Boolean, val quiet: Boolean, val restore: Float, val verify: Boolean = false) {
         var i = 0
         var wait = 0
+        var settled = 0
         val score = FloatArray(steps.size)
     }
 
@@ -982,9 +984,27 @@ class MainActivity : Activity() {
             val b = baseRequest(CameraDevice.TEMPLATE_PREVIEW)
             b.addTarget(ps)
             b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
-            s.setRepeatingRequest(b.build(), null, bg)
+            s.setRepeatingRequest(b.build(), lensCb, bg)
         } catch (_: Exception) {
         }
+    }
+
+    // Linsenstand aus den Kamera-Ergebnissen: gemessen wird erst, wenn die Linse wirklich angekommen ist
+    // (1.18.1 – vorher feste Wartezeit von 2 Bildern; die Linse fuhr oft noch → Ergebnis knapp daneben)
+    @Volatile private var lensMoving = true
+    @Volatile private var lensDist = -1f
+    private val lensCb = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(ss: CameraCaptureSession, r: CaptureRequest, res: TotalCaptureResult) {
+            res.get(CaptureResult.LENS_STATE)?.let { lensMoving = it == CaptureResult.LENS_STATE_MOVING }
+            res.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { lensDist = it }
+        }
+    }
+
+    /** Linse steht und ist (ungefähr) dort, wo sie hin soll? */
+    private fun lensArrived(target: Float): Boolean {
+        val d = lensDist
+        if (d < 0f) return true                      // Kamera meldet nichts → wie bisher nach Wartezeit
+        return !lensMoving && kotlin.math.abs(d - target) <= max(0.06f, target * 0.04f)
     }
 
     private fun setZoom(z: Float, fromSeek: Boolean = false) {
@@ -1145,6 +1165,20 @@ class MainActivity : Activity() {
             sw.wait++
             return
         }
+        // erst messen, wenn die Linse angekommen ist – und dann noch ein Bild, bis die Vorschau es zeigt
+        if (sw.wait < SWEEP_MAX_WAIT) {
+            if (!lensArrived(sw.steps[sw.i])) {
+                sw.settled = 0
+                sw.wait++
+                return
+            }
+            if (sw.settled < 1) {
+                sw.settled++
+                sw.wait++
+                return
+            }
+        }
+        sw.settled = 0
         sw.score[sw.i] = measureSharpness(focusView.fx, focusView.fy)
         sw.i++
         sw.wait = 0
@@ -3258,6 +3292,8 @@ class MainActivity : Activity() {
         private const val MUTED = 0xFF8A8A8A.toInt()
         private const val MAX_AI_INPUT = 1024
         private const val SWEEP_WAIT = 2
+        /** Höchstens so viele Vorschaubilder auf die Linse warten, dann trotzdem messen */
+        private const val SWEEP_MAX_WAIT = 12
         private const val CALIB_ZOOM = 2f
         private const val PROFILE_FILE = "schaerfeprofil.json"
         private const val PROFILE50_FILE = "schaerfeprofil50.json"

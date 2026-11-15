@@ -646,6 +646,13 @@ sichtbar. Neu, als Mischung aus beiden Welten:
    unter 60 % des Werts beim Scharfstellen fällt.
 Makro behält den eigenen Durchlauf.
 
+**Autofokus genauer (Version 1.18.1):** Johns Test: „Man sieht, wo es scharf ist, aber er geht nicht an die
+richtig scharfe Stelle.“ Ursache: Beim Durchlauf wurde nach einer festen Wartezeit (2 Vorschaubilder)
+gemessen – oft fuhr die Linse da noch, die Schärfe wurde der falschen Stellung zugeordnet, das Ergebnis lag
+versetzt. Neu: gemessen wird erst, wenn die Kamera „Linse steht“ meldet und die gemeldete Entfernung zur
+angefahrenen passt, plus ein Bild, bis die Vorschau es zeigt (höchstens 12 Bilder Wartezeit je Stufe).
+Dazu: Der Regler „Manueller Fokus“ sitzt jetzt unten über dem Zoomregler, wo der Daumen ist.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -698,6 +705,7 @@ Makro behält den eigenen Durchlauf.
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.18.1 | Autofokus misst erst bei stehender Linse; manueller Fokus unten |
 | 1.18 | Autofokus: Phasen-AF + Kontrast-Bestätigung, grün nur bei klarem Maximum, kein Pumpen |
 | 1.17.3 | 3D-Ansicht öffnet wieder (Gesten-Erkenner wurden im Hintergrund erzeugt) |
 | 1.17.2 | Plastizität ohne Dunst, 3D bildschirmfüllend mit Zoom und Stärke-Regler, Regler zusammengeklappt |
