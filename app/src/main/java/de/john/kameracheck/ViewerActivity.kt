@@ -24,6 +24,7 @@ class ViewerActivity : Activity() {
 
     private lateinit var compare: CompareView
     private lateinit var mixLabel: TextView
+    private lateinit var seek: BigSlider
     private lateinit var saveBtn: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -69,11 +70,17 @@ class ViewerActivity : Activity() {
         }
         panel.addView(mixLabel)
 
-        val seek = BigSlider(this).apply {
+        seek = BigSlider(this).apply {
             setValue(startMix / 100f)
             onChange = { v -> setMix(v) }
         }
         panel.addView(seek, LinearLayout.LayoutParams(-1, -2))
+        // Schnellvergleich an derselben Stelle: Echt ⇄ KI (Johns Wunsch)
+        panel.addView(button("Echt ⇄ KI umschalten", false) {
+            val v = if (compare.mix >= 0.5f) 0f else 1f
+            seek.setValue(v)
+            setMix(v)
+        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8f) })
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL

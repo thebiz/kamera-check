@@ -137,6 +137,10 @@ class MainActivity : Activity() {
     /** Normale Bedienelemente, die während der Kalibrierung ausgeblendet werden */
     private val normalControls = ArrayList<View>()
     @Volatile private var profile: SharpProfile? = null
+    /** Schärfeprofil für den 50-MP-Weg (Fotos der Xiaomi-Kamera), in Pixeln des 50-MP-Fotos */
+    @Volatile private var profile50: SharpProfile? = null
+    /** Was nach der Rückkehr aus der Xiaomi-Kamera passiert: "import" oder "calib50" */
+    private var xiaomiMode = "import"
 
     private class SharpProfile(val samples: List<Calib.Sample>, val r2: Float?, val flare: Float?, val date: String)
 
@@ -207,6 +211,7 @@ class MainActivity : Activity() {
         }
 
         loadProfile()
+        profile50 = readProfile(PROFILE50_FILE)
         diagOn = getPreferences(MODE_PRIVATE).getBoolean("diag", true)
         ispZoomOn = getPreferences(MODE_PRIVATE).getBoolean("ispzoom", true)
         strongOn = getSharedPreferences("ki", MODE_PRIVATE).getBoolean("strong_on", false)
@@ -1879,9 +1884,10 @@ class MainActivity : Activity() {
 
         // Unschärfe je Farbe am Bild selbst messen (Bildmitte): Objektive bilden R, G, B unterschiedlich scharf ab
         val fac = colorBlurFactors(px, w, h)
-        val perColor = fac != null && fac.any { abs(it - 1f) > 0.15f }
-        if (fac != null) info += "Unschärfe je Farbe (relativ): R ${fmt(fac[0])} · G ${fmt(fac[1])} · B ${fmt(fac[2])}" +
-            if (perColor) " → Farben werden getrennt zurückgerechnet" else " → ähnlich genug, gemeinsam gerechnet"
+        // Farben getrennt zu rechnen verschob bei Spiegelungen die Farbe (Johns Test 15.11.): die Messung an
+        // fertigen Kamerabildern ist dafür zu unsicher. Daher nur Helligkeit schärfen, Farbe bleibt vom Original.
+        val perColor = false
+        if (fac != null) info += "Unschärfe je Farbe (relativ, nur zur Info): R ${fmt(fac[0])} · G ${fmt(fac[1])} · B ${fmt(fac[2])} → Farben bleiben vom Original"
 
         val sigFor = { f: Float ->
             { x: Int, yy: Int ->
@@ -1908,6 +1914,20 @@ class MainActivity : Activity() {
             done += o.done
             o.y
         }
+        // Mischung je Stelle (Johns Beobachtung: große, kräftige Schrift hat mit der Physik-Rechnung mehr Randschärfe,
+        // feine Schrift und Flächen gewinnen mit der KI): an starken Kanten Physik, sonst KI – weich überblendet
+        var edgeShare = 0f
+        if (!perColor) {
+            val phys = FloatArray(w * h) { lum(bpx[it]) }
+            val wgt = strongEdgeWeight(y, w, h)
+            var sum = 0.0
+            val o = outPlanes[0]
+            for (i in o.indices) {
+                o[i] = o[i] * (1f - wgt[i]) + phys[i] * wgt[i]
+                sum += wgt[i]
+            }
+            edgeShare = (sum / max(1, o.size)).toFloat()
+        }
         for (i in px.indices) {
             val p = px[i]
             val r: Int
@@ -1930,7 +1950,56 @@ class MainActivity : Activity() {
             (if (flat > 0) " ($flat flach übersprungen)" else "") +
             (if (doneAvg < total) " · Rest physikalisch (Zeit)" else " · vollständig") +
             " · ${(SystemClock.elapsedRealtime() - t0) / 1000} s"
+        if (edgeShare > 0.001f) info += "Kräftige Kanten mit Physik-Schärfe: ${fmt(edgeShare * 100)} % der Bildfläche"
         return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
+    }
+
+    /**
+     * 0..1 je Pixel: wie sehr liegt hier eine kräftige, große Kante (hoher Kontrast im 7×7-Umfeld)?
+     * Weich ausgeblendet, damit keine Nahtstellen entstehen. Höchstens 70 % Physik-Anteil.
+     */
+    private fun strongEdgeWeight(y: FloatArray, w: Int, h: Int): FloatArray {
+        val r = 3
+        val lo = FloatArray(w * h)
+        val hi = FloatArray(w * h)
+        val tl = FloatArray(w * h)
+        val th = FloatArray(w * h)
+        for (j in 0 until h) for (i in 0 until w) {
+            var mn = 9f; var mx = -9f
+            for (k in max(0, i - r)..min(w - 1, i + r)) { val v = y[j * w + k]; if (v < mn) mn = v; if (v > mx) mx = v }
+            tl[j * w + i] = mn; th[j * w + i] = mx
+        }
+        for (j in 0 until h) for (i in 0 until w) {
+            var mn = 9f; var mx = -9f
+            for (k in max(0, j - r)..min(h - 1, j + r)) { val q = k * w + i; if (tl[q] < mn) mn = tl[q]; if (th[q] > mx) mx = th[q] }
+            lo[j * w + i] = mn; hi[j * w + i] = mx
+        }
+        val raw = FloatArray(w * h) { (((hi[it] - lo[it]) - 0.22f) / 0.25f).coerceIn(0f, 1f) * 0.7f }
+        // weich: Kastenfilter Radius 4, zweimal getrennt
+        val b = 4
+        val tmp = FloatArray(w * h)
+        for (j in 0 until h) {
+            var acc = 0f
+            for (k in 0 until min(w, b + 1)) acc += raw[j * w + k]
+            for (i in 0 until w) {
+                val n = min(w - 1, i + b) - max(0, i - b) + 1
+                tmp[j * w + i] = acc / n
+                if (i + b + 1 < w) acc += raw[j * w + i + b + 1]
+                if (i - b >= 0) acc -= raw[j * w + i - b]
+            }
+        }
+        val out = FloatArray(w * h)
+        for (i in 0 until w) {
+            var acc = 0f
+            for (k in 0 until min(h, b + 1)) acc += tmp[k * w + i]
+            for (j in 0 until h) {
+                val n = min(h - 1, j + b) - max(0, j - b) + 1
+                out[j * w + i] = acc / n
+                if (j + b + 1 < h) acc += tmp[(j + b + 1) * w + i]
+                if (j - b >= 0) acc -= tmp[(j - b) * w + i]
+            }
+        }
+        return out
     }
 
     /**
@@ -2027,6 +2096,8 @@ class MainActivity : Activity() {
         val m = android.widget.PopupMenu(this, anchor)
         m.menu.add(0, 1, 0, if (profile != null) "Neu kalibrieren" else "Kalibrieren")
         if (profile != null) m.menu.add(0, 4, 1, "Kalibrierung ansehen")
+        m.menu.add(0, 8, 1, if (profile50 != null) "50 MP neu kalibrieren" else "Für 50 MP kalibrieren")
+        if (profile50 != null) m.menu.add(0, 9, 1, "50-MP-Profil ansehen")
         if (profile != null) m.menu.add(0, 2, 2, "Kalibrierung löschen")
         m.menu.add(0, 5, 3, if (diagOn) "Diagnosebild: an ✓" else "Diagnosebild: aus")
         m.menu.add(0, 6, 4, if (ispZoomOn) "Quelle: Kamera-Zoom ✓" else "Quelle: ganzes Sensorbild + RAW")
@@ -2043,6 +2114,10 @@ class MainActivity : Activity() {
                 }
                 3 -> startActivity(Intent(this, CheckActivity::class.java))
                 4 -> profile?.let { p -> showProfile(p, "Schärfeprofil", "Wird bei jedem Foto ab 2× genutzt.") }
+                8 -> askCalib50()
+                9 -> profile50?.let { p ->
+                    showProfile(p, "50-MP-Schärfeprofil", "Wird beim Import von 50-MP-Fotos genutzt.", p.samples.map { where50(it.nx, it.ny) })
+                }
                 7 -> pickPhotos()
                 6 -> {
                     ispZoomOn = !ispZoomOn
@@ -2263,14 +2338,15 @@ class MainActivity : Activity() {
     }
 
     /** Zusammenfassung des Schärfeprofils als Dialog (nach dem Kalibrieren und unter Mehr › Kalibrierung ansehen). */
-    private fun showProfile(p: SharpProfile, title: String, footer: String) {
+    private fun showProfile(p: SharpProfile, title: String, footer: String, names0: List<String>? = null) {
         val samples = p.samples
         val lines = ArrayList<String>()
         if (samples.isNotEmpty()) {
             val c = samples.first().luma()
             val cm = (c[0] + c[1]) / 2f
-            lines += "Mitte: ${fmt2(cm)} px Unschärfe (Sensorpixel)"
-            val names = calibSpots.map { it.first }
+            lines += "${names0?.firstOrNull()?.replaceFirstChar { it.uppercase() } ?: "Mitte"}: ${fmt2(cm)} px Unschärfe" +
+                if (names0 == null) " (Sensorpixel)" else " (Pixel des 50-MP-Fotos)"
+            val names = names0 ?: calibSpots.map { it.first }
             for ((i, sm) in samples.withIndex().drop(1)) {
                 val l = sm.luma()
                 val v = (l[0] + l[1]) / 2f
@@ -2358,9 +2434,185 @@ class MainActivity : Activity() {
                 "(nur im Format 3:4 speichert sie wirklich 50 MP).\n" +
                 "2. 1 bis 8 Fotos vom selben Motiv machen, möglichst ruhig – mehrere werden übereinandergelegt.\n" +
                 "3. Mit „Zurück“ hierher kommen: Die App holt die neuen Fotos automatisch.")
-            .setPositiveButton("Kamera öffnen") { _, _ -> launchXiaomi() }
+            .setPositiveButton("Kamera öffnen") { _, _ -> xiaomiMode = "import"; launchXiaomi() }
             .setNegativeButton("Abbrechen", null)
             .show()
+    }
+
+    // ───────────────────────── Kalibrieren für 50 MP ─────────────────────────
+
+    private fun askCalib50() {
+        if (busy) return
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Für 50 MP kalibrieren")
+            .setMessage("Misst, wie scharf die Xiaomi-Kamera im 50-MP-Modus an verschiedenen Bildstellen zeichnet – " +
+                "für genaueres „Schärfe zurückholen“ beim Import.\n\n" +
+                "1. Auf dem iPad das Schärfe-Muster öffnen (Mehr › Kalibrieren zeigt den QR-Code).\n" +
+                "2. Xiaomi-Kamera: Pro, Format 3:4, „50M“.\n" +
+                "3. Etwa 1 bis 1,5 m Abstand, sodass das iPad nur einen Teil des Bildes füllt.\n" +
+                "4. Fünf Fotos: iPad einmal in der Bildmitte, dann oben links, oben rechts, unten links, unten rechts im Bild. " +
+                "Ruhig halten, das Muster muss scharf sein.\n" +
+                "5. Mit „Zurück“ hierher – die App findet das Muster in jedem Foto selbst.")
+            .setPositiveButton("Kamera öffnen") { _, _ -> xiaomiMode = "calib50"; launchXiaomi() }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun where50(nx: Float, ny: Float): String {
+        val dx = nx - 0.5f
+        val dy = ny - 0.5f
+        if (abs(dx) < 0.17f && abs(dy) < 0.17f) return "Mitte"
+        val v = if (dy < -0.17f) "oben" else if (dy > 0.17f) "unten" else ""
+        val hz = if (dx < -0.17f) "links" else if (dx > 0.17f) "rechts" else ""
+        return listOf(v, hz).filter { it.isNotEmpty() }.joinToString(" ").ifEmpty { "Mitte" }
+    }
+
+    /**
+     * Jedes Foto: das Muster (Stelle mit den meisten Kanten) finden, dort 1024 × 1024 in voller Auflösung
+     * auswerten und die Unschärfe je Farbe und Richtung messen (in Pixeln des 50-MP-Fotos).
+     */
+    private fun calibrate50(uris: List<android.net.Uri>) {
+        busy = true
+        runOnUiThread { shutter.mode = ShutterView.Mode.PROCESSING }
+        aiWorker.execute {
+            val samples = ArrayList<Calib.Sample>()
+            val notes = ArrayList<String>()
+            try {
+                for ((k, u) in uris.withIndex()) {
+                    showStatus("Kalibriere 50 MP: Foto ${k + 1}/${uris.size} …")
+                    val inf = PhotoIo.info(this, u) ?: continue
+                    val mp = inf.uprightW.toLong() * inf.uprightH / 1e6
+                    if (mp < 30) { notes += "Foto ${k + 1}: nur ${"%.0f".format(mp)} MP – übersprungen (3:4 + 50M?)"; continue }
+                    val prev = PhotoIo.preview(this, u, 1024) ?: continue
+                    val c = findPattern(prev)
+                    prev.recycle()
+                    val half = 512f
+                    val rect = floatArrayOf(
+                        (c.first - half / inf.uprightW).coerceIn(0f, 1f - 1024f / inf.uprightW),
+                        (c.second - half / inf.uprightH).coerceIn(0f, 1f - 1024f / inf.uprightH), 0f, 0f,
+                    )
+                    rect[2] = rect[0] + 1024f / inf.uprightW
+                    rect[3] = rect[1] + 1024f / inf.uprightH
+                    val (bmp, _) = PhotoIo.crop(this, u, rect, 0) ?: continue
+                    val w = bmp.width
+                    val h = bmp.height
+                    val px = IntArray(w * h).also { bmp.getPixels(it, 0, w, 0, 0, w, h) }
+                    bmp.recycle()
+                    // sRGB → lineares Licht (wie in der Kalibrierung mit RAW)
+                    val lut = FloatArray(256) { v -> val x = v / 255f; if (x <= 0.04045f) x / 12.92f else Math.pow(((x + 0.055f) / 1.055f).toDouble(), 2.4).toFloat() }
+                    val planes = Array(3) { ch -> FloatArray(w * h) { i -> lut[(px[i] shr (16 - 8 * ch)) and 255] } }
+                    val m = Calib.measureSharpness(planes, w, h, 1f, 0f)
+                    val nx = (rect[0] + rect[2]) / 2f
+                    val ny = (rect[1] + rect[3]) / 2f
+                    if (m == null) { notes += "Foto ${k + 1} (${where50(nx, ny)}): Muster nicht gefunden oder unscharf"; continue }
+                    samples += Calib.Sample(nx, ny, m.first, m.second)
+                    notes += "Foto ${k + 1}: ${where50(nx, ny)} ✓"
+                }
+                if (samples.isEmpty()) {
+                    runOnUiThread {
+                        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                            .setTitle("Kalibrierung nicht möglich")
+                            .setMessage(notes.joinToString("\n").ifEmpty { "Keine Fotos gefunden." } +
+                                "\n\nTipp: Muster gut beleuchtet, scharf, iPad-Helligkeit mittel, kein Spiegeln.")
+                            .setPositiveButton("OK", null).show()
+                    }
+                } else {
+                    // Mitte zuerst (die Zusammenfassung vergleicht die anderen Stellen damit)
+                    samples.sortBy { (it.nx - 0.5f) * (it.nx - 0.5f) + (it.ny - 0.5f) * (it.ny - 0.5f) }
+                    val date = SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY).format(Date())
+                    writeProfile(PROFILE50_FILE, samples, null, date)
+                    val p = SharpProfile(samples, null, null, date)
+                    profile50 = p
+                    showProfile(p, "50-MP-Profil gespeichert ✓",
+                        notes.joinToString("\n") + "\n\nAb jetzt nutzt der Import von 50-MP-Fotos dieses Profil.",
+                        samples.map { where50(it.nx, it.ny) })
+                }
+            } catch (e: Throwable) {
+                showStatus("Kalibrierung fehlgeschlagen: ${e.message}")
+            } finally {
+                busy = false
+                runOnUiThread { shutter.mode = ShutterView.Mode.IDLE }
+                status.postDelayed({ if (!busy) showStatus(null) }, 4000)
+            }
+        }
+    }
+
+    /** Mitte (Anteile 0..1) des Bereichs mit den meisten Kanten – dort ist das Testmuster. */
+    private fun findPattern(b: Bitmap): Pair<Float, Float> {
+        val w = b.width
+        val h = b.height
+        val px = IntArray(w * h).also { b.getPixels(it, 0, w, 0, 0, w, h) }
+        val y = FloatArray(w * h) { i -> ((px[i] shr 8) and 255).toFloat() }
+        val g = FloatArray(w * h)
+        for (j in 1 until h - 1) for (i in 1 until w - 1) {
+            val k = j * w + i
+            g[k] = abs(y[k + 1] - y[k - 1]) + abs(y[k + w] - y[k - w])
+        }
+        // Summe über ein Fenster von 1/6 der Bildbreite, gröbstes Raster reicht
+        val win = max(8, w / 6)
+        var best = -1.0
+        var bx = w / 2
+        var by = h / 2
+        val step = max(2, win / 4)
+        var j = 0
+        while (j + win < h) {
+            var i = 0
+            while (i + win < w) {
+                var s = 0.0
+                for (jj in j until j + win step 2) for (ii in i until i + win step 2) s += g[jj * w + ii]
+                if (s > best) { best = s; bx = i + win / 2; by = j + win / 2 }
+                i += step
+            }
+            j += step
+        }
+        return bx / w.toFloat() to by / h.toFloat()
+    }
+
+    private fun writeProfile(file: String, samples: List<Calib.Sample>, wedge: Calib.Wedge?, date: String) {
+        val json = org.json.JSONObject().apply {
+            put("date", date)
+            put("device", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
+            put("samples", org.json.JSONArray().apply {
+                for (s in samples) put(org.json.JSONObject().apply {
+                    put("nx", s.nx.toDouble())
+                    put("ny", s.ny.toDouble())
+                    put("edges", s.edges)
+                    put("sig", org.json.JSONArray().apply {
+                        for (c in 0 until 3) put(org.json.JSONArray().apply { put(s.sig[c][0].toDouble()); put(s.sig[c][1].toDouble()) })
+                    })
+                })
+            })
+            if (wedge != null) {
+                put("r2", wedge.r2.toDouble())
+                put("flare", wedge.flare.toDouble())
+            }
+        }
+        File(filesDir, file).writeText(json.toString(2))
+    }
+
+    private fun readProfile(file: String): SharpProfile? = try {
+        val f = File(filesDir, file)
+        if (!f.exists()) null else {
+            val j = org.json.JSONObject(f.readText())
+            val arr = j.getJSONArray("samples")
+            val list = (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                val sg = o.getJSONArray("sig")
+                Calib.Sample(
+                    o.getDouble("nx").toFloat(), o.getDouble("ny").toFloat(),
+                    Array(3) { c -> val a = sg.getJSONArray(c); floatArrayOf(a.getDouble(0).toFloat(), a.getDouble(1).toFloat()) },
+                    o.optInt("edges", 0),
+                )
+            }
+            if (list.isEmpty()) null else SharpProfile(
+                list,
+                if (j.has("r2")) j.getDouble("r2").toFloat() else null,
+                if (j.has("flare")) j.getDouble("flare").toFloat() else null,
+                j.optString("date", ""),
+            )
+        }
+    } catch (_: Throwable) {
+        null
     }
 
     private fun launchXiaomi() {
@@ -2369,7 +2621,8 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(p), REQ_PHOTOS)
             return
         }
-        getPreferences(MODE_PRIVATE).edit().putLong("xiaomiSince", System.currentTimeMillis() / 1000 - 2).apply()
+        getPreferences(MODE_PRIVATE).edit().putLong("xiaomiSince", System.currentTimeMillis() / 1000 - 2)
+            .putString("xiaomiMode", xiaomiMode).apply()
         try {
             startActivity(Intent(android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))
         } catch (_: Exception) {
@@ -2383,7 +2636,8 @@ class MainActivity : Activity() {
         val prefs = getPreferences(MODE_PRIVATE)
         val since = prefs.getLong("xiaomiSince", 0L)
         if (since <= 0L) return
-        prefs.edit().remove("xiaomiSince").apply()
+        val mode = prefs.getString("xiaomiMode", "import") ?: "import"
+        prefs.edit().remove("xiaomiSince").remove("xiaomiMode").apply()
         Thread {
             val uris = ArrayList<android.net.Uri>()
             try {
@@ -2408,7 +2662,7 @@ class MainActivity : Activity() {
                         "Kein Zugriff auf neue Fotos – in den Einstellungen „Alle Fotos erlauben“ oder Mehr › Fotos importieren"
                     else "Kein neues Foto gefunden – oder über Mehr › Fotos importieren wählen")
                     status.postDelayed({ if (!busy) showStatus(null) }, 5000)
-                } else openImport(uris)
+                } else if (mode == "calib50") calibrate50(uris) else openImport(uris)
             }
         }.start()
     }
@@ -2537,14 +2791,32 @@ class MainActivity : Activity() {
             val sy = blur.sy.coerceIn(0.5f, 2.5f)
             info += "Unschärfe gemessen ${fmt(blur.sx)}/${fmt(blur.sy)} px" + (if (blur.fromText) " (an Schrift)" else "") +
                 (if (sx != blur.sx || sy != blur.sy) " → begrenzt auf ${fmt(sx)}/${fmt(sy)} px" else "")
-            val (sharp, decIters) = deblurBitmap(res.merged, sx, sy, if (strongOn) 150 else 80, if (strongOn) 60_000L else 25_000L, null) { pct ->
+            // 50-MP-Profil (falls kalibriert): Unschärfe je Bildstelle; Zusatz-Unschärfe dieses Fotos quadratisch dazu
+            val p50 = if (mpx >= 30) profile50 else null
+            val sigma50: ((Int, Int) -> FloatArray)? = p50?.let { prof ->
+                val uw = dims.uprightW.toFloat()
+                val uh = dims.uprightH.toFloat()
+                val c0 = Calib.sigmaAt(prof.samples, (rect[0] + rect[2]) / 2f, (rect[1] + rect[3]) / 2f)
+                val ex2 = max(0f, sx * sx - c0[0] * c0[0])
+                val ey2 = max(0f, sy * sy - c0[1] * c0[1])
+                info += "50-MP-Profil aktiv (kalibriert ${prof.date}): hier ${fmt(c0[0])}/${fmt(c0[1])} px · Zusatz ${fmt(sqrt(ex2))}/${fmt(sqrt(ey2))} px"
+                val fn: (Int, Int) -> FloatArray = { x, yy ->
+                    // Ergebnisbild = innerer Ausschnitt, beginnt bei rect[0], rect[1] des Fotos
+                    val nx = (rect[0] * uw + x) / uw
+                    val ny = (rect[1] * uh + yy) / uh
+                    val p = Calib.sigmaAt(prof.samples, nx, ny)
+                    floatArrayOf(sqrt(p[0] * p[0] + ex2), sqrt(p[1] * p[1] + ey2))
+                }
+                fn
+            }
+            val (sharp, decIters) = deblurBitmap(res.merged, sx, sy, if (strongOn) 150 else 80, if (strongOn) 60_000L else 25_000L, sigma50) { pct ->
                 showStatus("Schärfe zurückholen … $pct %")
             }
             info += "Schärfe zurückgeholt (Physik): $decIters Durchgänge (Richardson-Lucy, starke Kanten gebremst)"
             keep("4 Schärfe zurückgeholt (Physik)", sharp)
 
             // 3. KI-Entschärfen mit bekannter Unschärfe (DPIR); falls nicht verfügbar: Allzweck-KI
-            val dp = dpirBitmap(res.merged, sharp, sx, sy, null, info)
+            val dp = dpirBitmap(res.merged, sharp, sx, sy, sigma50, info)
             val kiRaw = dp ?: run {
                 val model = if (strongOn) AiUpscaler.getStrong(this) { showStatus(it) } else ai!!
                 val budget = if (strongOn) 180_000L else 45_000L
@@ -2740,6 +3012,7 @@ class MainActivity : Activity() {
         private const val SWEEP_WAIT = 2
         private const val CALIB_ZOOM = 2f
         private const val PROFILE_FILE = "schaerfeprofil.json"
+        private const val PROFILE50_FILE = "schaerfeprofil50.json"
         private const val PATTERN_URL = "https://claude.ai/artifact/STqv4hLLZ5vm1NSBR2tb6k"
         private const val RAW_BUDGET = 150_000_000L
         private const val RECHECK_MS = 5000L
