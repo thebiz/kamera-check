@@ -22,7 +22,7 @@ herausholen, statt es nur hübsch zu erfinden.
 
 ---
 
-## 2. Die Rechenkette (Version 1.7)
+## 2. Die Rechenkette (Version 1.8)
 
 Ein Druck auf den Auslöser löst diese Schritte aus:
 
@@ -331,6 +331,24 @@ Kacheln 256 × 256 mit 24 px Umfeld (Kacheln kosten nichts: 22,71 dB), Mitte zue
 2 Minuten (stark: 5); die Kotlin-Umsetzung stimmt mit der PC-Referenz auf 0,000002 überein.
 Ersetzt die Allzweck-KI; diese bleibt als Rückfall, falls das Modell nicht lädt.
 
+**Erster DPIR-Import (15.11.2026, ca. 4 Uhr, Raumlicht):** ![Import 1.7](diagnose_import_v1-7.jpg)
+
+Johns Urteil im Viewer (Linie zwischen Xiaomi-Foto und Ergebnis): **„deutlich besser“** –
+erstmals schlägt die App sichtbar, was das Handy selbst liefert. Kachel 5 (DPIR): klare Kanten,
+keine Säume, kein Plastik-Look, keine erfundenen Striche. Einschränkungen: nur 54 von 80
+Kacheln in 2 Minuten (Rest physikalisch), und offen ist, ob es **echtes Detail** ist oder nur
+kräftigere Schärfe (Johns Frage).
+
+**Version 1.8:**
+- **Gegenprobe** im Diagnosebild: das Xiaomi-Foto *nur klassisch nachgeschärft*
+  (Unscharf-Maskieren), automatisch so stark eingestellt, dass die Kanten genauso kräftig
+  sind wie bei DPIR. Sieht DPIR daneben immer noch besser aus, holt es echte Details.
+- **Vollständiger:** flache Kacheln (Wand, Himmel) werden übersprungen, Zeitbudget 5 Minuten
+  (stark: 10) – Johns Vorgabe „Zeit spielt keine Rolle“.
+- **Farben getrennt, wenn nötig:** Die Unschärfe von Rot, Grün, Blau wird am Bild selbst
+  gemessen; weichen sie mehr als 15 % voneinander ab, rechnet DPIR jede Farbe mit ihrer
+  eigenen Unschärfe zurück (dreifache Zeit), sonst gemeinsam.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -382,6 +400,7 @@ Ersetzt die Allzweck-KI; diese bleibt als Rückfall, falls das Modell nicht läd
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.8 | Gegenprobe „nur nachgeschärft“, flache Kacheln übersprungen, mehr Zeit, Farben getrennt bei Bedarf |
 | 1.7 | KI-Entschärfen mit bekannter Unschärfe (DPIR/DRUNet) statt Allzweck-KI |
 | 1.6 | Import: Ausrichten bis ±400 px, Passprobe gegen Doppelbilder, Rahmen relativ ziehen |
 | 1.5 | 50-MP-Fotos der Xiaomi-Kamera importieren (automatisch, Teilen, Auswahl) mit Diagnosebild; 50-MP-Test; Entschärfen gebremst |
