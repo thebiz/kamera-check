@@ -491,6 +491,21 @@ gespeicherte Diagnose- oder Vergleichsbild geht ohne Umweg über die Galerie dir
 Erwartung: B verliert das Gitter, bleibt aber bei 10× wohl hinter A – RAW-SR lohnt sich vermutlich
 erst dort, wo A keinen Vorteil vom Kamera-Zoom mehr hat. Das muss der nächste Vergleich zeigen.
 
+**Zweiter A/B-Vergleich mit 1.12.1 (15.11.2026, 16 Uhr):** ![Vergleich A/B 1.12.1](vergleich_ab_v1-12-1.jpg)
+Das Karomuster ist weg (Rauschen gemessen 0,9, angesetzt 4 von 255) – die Ursache war also richtig
+erkannt. Übrig bleiben in B **Echo-Streifen parallel zu senkrechten Kanten** (Rand des Schildes,
+Gewicht-Symbol): typisches Nachschwingen einer zu kräftigen Entfaltung. Vermutete Ursache: Die
+Unschärfe nach dem Eintragen der Rohpixel ist keine Gauß-Glocke (jede Farbe nur jedes zweite Pixel,
+dazu leichte Restverschiebung der Bilder aus der Hand); die Rechnung nimmt aber eine Gauß-Glocke
+gleicher Kantenbreite an und hebt dadurch mittlere Feinheiten zu stark an. Und schon *vor* jeder
+Schärfung ist B weicher als A, mit Farbsaum.
+
+**Urteil nach Johns Regel:** Bei 10× gewinnt A (Kamera-Zoom) deutlich. B kann aus den
+zusammengefassten 12-MP-Rohpixeln (410 × 306 im Ausschnitt) nicht aufholen, was A über den
+hochauflösenden Mittelteil des Sensors schon hat (818 × 614). RAW-Super-Resolution lohnt sich nur
+auf vollen 50-MP-Rohdaten – die gibt das Handy ohne Root nicht her. Lehre: **Mehr Bilder auf
+gröberem Raster schlagen nicht weniger Bilder auf feinerem Raster.**
+
 ---
 
 ## 4. Was wir gelernt haben
