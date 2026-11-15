@@ -85,7 +85,7 @@ class ViewerActivity : Activity() {
         }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8f) })
 
         // Johns Wunsch: Diagnosebild ohne Umweg über die Galerie direkt in den Chat schicken
-        lastDiag?.let { u ->
+        recallDiag(this)?.let { u ->
             panel.addView(button("Diagnose teilen", false) {
                 val send = Intent(Intent.ACTION_SEND).apply {
                     type = "image/jpeg"
@@ -192,6 +192,15 @@ class ViewerActivity : Activity() {
 
         /** Zuletzt gespeichertes Diagnose-/Vergleichsbild – zum direkten Teilen aus der Ansicht */
         @Volatile var lastDiag: Uri? = null
+
+        /** Merkt sich das Diagnosebild auch über einen Neustart der App hinaus */
+        fun rememberDiag(a: Activity, uri: Uri) {
+            lastDiag = uri
+            a.getSharedPreferences("viewer", Activity.MODE_PRIVATE).edit().putString("lastDiag", uri.toString()).apply()
+        }
+
+        private fun recallDiag(a: Activity): Uri? = lastDiag
+            ?: a.getSharedPreferences("viewer", Activity.MODE_PRIVATE).getString("lastDiag", null)?.let { Uri.parse(it) }
 
         fun saveToGallery(a: Activity, b: Bitmap, name: String): Uri {
             val values = ContentValues().apply {

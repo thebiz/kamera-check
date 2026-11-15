@@ -1471,7 +1471,8 @@ class MainActivity : Activity() {
                 fun keep(name: String, b: Bitmap) {
                     if (dr != null) try { diag += name to diagCrop(b, dr, col.rotation) } catch (_: Throwable) {}
                 }
-                col.diagPreview?.let { diag += "1 Vorschau (Handy-Bildprozessor)" to diagScale(it) }
+                // Vorschau nur einmal (diagScale gibt das Original frei; B nutzt die Kachel von A)
+                if (pre == null) col.diagPreview?.let { diag += "1 Vorschau (Handy-Bildprozessor)" to diagScale(it) }
                 keep("2 Kamera-Einzelbild (ohne Nachschärfen)", res.single)
                 keep("3 YUV-Serie gemittelt", res.merged)
 
@@ -1678,7 +1679,7 @@ class MainActivity : Activity() {
                 } else if (diag.isNotEmpty()) {
                     showStatus("Speichere Diagnosebild …")
                     val sheet = diagSheet(diag, info)
-                    ViewerActivity.lastDiag = ViewerActivity.saveToGallery(this, sheet, "diagnose_${stamp}_${tag}")
+                    ViewerActivity.rememberDiag(this, ViewerActivity.saveToGallery(this, sheet, "diagnose_${stamp}_${tag}"))
                     sheet.recycle()
                 }
                 val small = Bitmap.createScaledBitmap(mix, dp(54f) * 2, dp(54f) * 2 * mix.height / mix.width, true)
@@ -1745,7 +1746,7 @@ class MainActivity : Activity() {
         )
         if (tiles.isNotEmpty()) {
             val sheet = diagSheet(tiles, info.drop(2))
-            ViewerActivity.lastDiag = ViewerActivity.saveToGallery(this, sheet, "vergleich_${stamp}_${tag}")
+            ViewerActivity.rememberDiag(this, ViewerActivity.saveToGallery(this, sheet, "vergleich_${stamp}_${tag}"))
             sheet.recycle()
         }
         // übrige Kacheln freigeben (diagSheet gibt die verwendeten frei)
@@ -2996,7 +2997,7 @@ class MainActivity : Activity() {
             }
             if (diag.isNotEmpty()) {
                 val sheet = diagSheet(diag, info)
-                ViewerActivity.lastDiag = ViewerActivity.saveToGallery(this, sheet, "diagnose_import_${stamp}")
+                ViewerActivity.rememberDiag(this, ViewerActivity.saveToGallery(this, sheet, "diagnose_import_${stamp}"))
                 sheet.recycle()
             }
             val small = Bitmap.createScaledBitmap(mix, dp(54f) * 2, dp(54f) * 2 * mix.height / mix.width, true)
