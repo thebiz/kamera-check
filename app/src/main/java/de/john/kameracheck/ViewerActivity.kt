@@ -33,7 +33,13 @@ class ViewerActivity : Activity() {
     // Klarheit (Johns Wunsch nach dem Test in der Galerie): im Hintergrund rechnen, neuester Wert gewinnt
     private val clarityLock = Object()
     @Volatile private var clarityWanted = DEFAULT_CLARITY
+    /** Plastizität (Johns Idee): nah knackiger, fern weicher und dunstiger – nach der Tiefenkarte */
+    @Volatile private var plasticWanted = 0f
+    private lateinit var plasticLabel: TextView
+    @Volatile private var depth: Depth? = null
     private var clarityThread: Thread? = null
+    private lateinit var stage: FrameLayout
+    private var parallax: ParallaxView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,7 +51,7 @@ class ViewerActivity : Activity() {
             setBackgroundColor(BG)
         }
 
-        val stage = FrameLayout(this)
+        stage = FrameLayout(this)
         compare = CompareView(this)
         stage.addView(compare, FrameLayout.LayoutParams(-1, -1))
         root.addView(stage, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -102,6 +108,25 @@ class ViewerActivity : Activity() {
                 synchronized(clarityLock) { clarityWanted = v; clarityLock.notifyAll() }
             }
         }, LinearLayout.LayoutParams(-1, -2))
+
+        plasticWanted = try {
+            getSharedPreferences("viewer", MODE_PRIVATE).getFloat("plastic", 0f)
+        } catch (_: Throwable) { 0f }
+        plasticLabel = TextView(this).apply {
+            setTextColor(FG)
+            textSize = 15f
+            setPadding(0, dp(8f), 0, 0)
+        }
+        showPlastic(plasticWanted, false)
+        panel.addView(plasticLabel)
+        panel.addView(BigSlider(this).apply {
+            setValue(plasticWanted)
+            onChange = { v ->
+                showPlastic(v, true)
+                getSharedPreferences("viewer", MODE_PRIVATE).edit().putFloat("plastic", v).apply()
+                synchronized(clarityLock) { plasticWanted = v; clarityLock.notifyAll() }
+            }
+        }, LinearLayout.LayoutParams(-1, -2))
         // Schnellvergleich an derselben Stelle: Echt ⇄ KI (Johns Wunsch)
         panel.addView(button("Echt ⇄ KI umschalten", false) {
             val v = if (compare.mix >= 0.5f) 0f else 1f
@@ -112,7 +137,7 @@ class ViewerActivity : Activity() {
         // Johns Wünsche: fertiges Foto direkt in der Galerie öffnen, Diagnosebild direkt teilen
         val links = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         recallPhoto(this)?.let { u ->
-            links.addView(button("In Galerie öffnen", false) { openInGallery(this, u) },
+            links.addView(button("Galerie öffnen", false) { openInGallery(this, u) }.apply { textSize = 13f },
                 LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(4f) })
         }
         recallDiag(this)?.let { u ->
@@ -123,8 +148,10 @@ class ViewerActivity : Activity() {
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 startActivity(Intent.createChooser(send, "Diagnose teilen"))
-            }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(4f) })
+            }.apply { textSize = 13f }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(4f); rightMargin = dp(4f) })
         }
+        links.addView(button("3D ansehen", false) { open3d() }.apply { textSize = 13f },
+            LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(4f) })
         if (links.childCount > 0) panel.addView(links, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8f) })
 
         val row = LinearLayout(this).apply {
@@ -178,19 +205,30 @@ class ViewerActivity : Activity() {
                     Bitmap.createBitmap(ck.w, ck.h, Bitmap.Config.ARGB_8888)) }
                 var cur = 0
                 var done = -1f
+                var doneP = -1f
+                var depthSet = false
                 while (!Thread.currentThread().isInterrupted) {
-                    val v = synchronized(clarityLock) {
-                        while (clarityWanted == done) clarityLock.wait()
-                        clarityWanted
+                    val (v, pl) = synchronized(clarityLock) {
+                        while (clarityWanted == done && plasticWanted == doneP) clarityLock.wait()
+                        clarityWanted to plasticWanted
+                    }
+                    if (pl > 0f && !depthSet) {
+                        runOnUiThread { plasticLabel.text = "Plastizität: Tiefe wird geschätzt …" }
+                        val d = depth ?: Depth.estimate(this, ki).also { depth = it }
+                        cr.setDepth(d)
+                        ck.setDepth(d)
+                        depthSet = true
                     }
                     val b = bufs[cur]
-                    cr.apply(v, b[0])
-                    ck.apply(v, b[1])
+                    cr.apply(v, b[0], pl)
+                    ck.apply(v, b[1], pl)
                     done = v
+                    doneP = pl
                     cur = 1 - cur
                     runOnUiThread {
                         compare.setRight(b[0], b[1])
                         showClarity(v, clarityWanted != v)
+                        showPlastic(pl, plasticWanted != pl)
                     }
                 }
             } catch (_: InterruptedException) {
@@ -200,8 +238,69 @@ class ViewerActivity : Activity() {
         }.also { it.start() }
     }
 
+    private fun showPlastic(v: Float, busy: Boolean) {
+        val pct = (v * 100).roundToInt()
+        plasticLabel.text = (if (pct == 0) "Plastizität (Tiefe): aus" else "Plastizität (Tiefe): $pct %") + if (busy) " · rechnet …" else ""
+    }
+
+    /** 3D-Wackeln: aktuelles Ergebnis (wie rechts eingestellt) nach Tiefe in Schichten bewegen */
+    private fun open3d() {
+        if (parallax != null) return
+        val hint = TextView(this).apply {
+            text = "3D wird vorbereitet …"
+            setTextColor(FG)
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setBackgroundColor(0xCC000000.toInt())
+        }
+        stage.addView(hint, FrameLayout.LayoutParams(-1, -1))
+        Thread {
+            try {
+                val img = compare.renderMix()
+                val d = depth ?: Depth.estimate(this, img).also { depth = it }
+                val pv = ParallaxView(this)
+                pv.setImage(img, d)
+                img.recycle()
+                runOnUiThread {
+                    stage.removeView(hint)
+                    val box = FrameLayout(this).apply { setBackgroundColor(BG) }
+                    box.addView(pv, FrameLayout.LayoutParams(-1, -1))
+                    box.addView(button("3D schließen", true) { close3d() }, FrameLayout.LayoutParams(-2, -2,
+                        Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(16f) })
+                    box.addView(TextView(this).apply {
+                        text = "Bewegt sich von selbst · Finger ziehen: selbst steuern"
+                        setTextColor(FG)
+                        textSize = 12f
+                        setPadding(dp(10f), dp(6f), dp(10f), dp(6f))
+                        setBackgroundColor(0x99000000.toInt())
+                    }, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(12f) })
+                    stage.addView(box, FrameLayout.LayoutParams(-1, -1))
+                    parallax = pv
+                    pv.tag = box
+                }
+            } catch (e: Throwable) {
+                runOnUiThread {
+                    hint.text = "3D nicht möglich (${e.message})"
+                    hint.postDelayed({ stage.removeView(hint) }, 2500)
+                }
+            }
+        }.start()
+    }
+
+    private fun close3d() {
+        val pv = parallax ?: return
+        stage.removeView(pv.tag as View)
+        pv.release()
+        parallax = null
+    }
+
+    override fun onBackPressed() {
+        if (parallax != null) close3d() else super.onBackPressed()
+    }
+
     override fun onDestroy() {
         clarityThread?.interrupt()
+        parallax?.release()
         super.onDestroy()
     }
 

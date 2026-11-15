@@ -27,19 +27,43 @@ class Clarity(src: Bitmap) {
         detail = detailLayer(lum, w, h)
     }
 
-    /** Neues Bild mit Klarheit (0 = aus, 1 = kräftig) in [out] schreiben. */
-    fun apply(amount: Float, out: Bitmap) {
+    /** Nähe je Pixel (0 = fern, 1 = nah) für die Plastizität – einmal hochgerechnet */
+    private var near: FloatArray? = null
+
+    fun setDepth(d: Depth) {
+        near = d.upscale(w, h)
+    }
+
+    /**
+     * Neues Bild mit Klarheit (0 = aus, 1 = kräftig) und Plastizität (0 = aus, 1 = kräftig) in [out] schreiben.
+     * Plastizität (Johns Idee): Nahes bekommt mehr Mikrokontrast, Fernes weniger und einen Hauch Dunst –
+     * so wie das Auge Tiefe in der Landschaft liest (Luftperspektive).
+     */
+    fun apply(amount: Float, out: Bitmap, plastic: Float = 0f) {
         val k = amount * MAX_GAIN
+        val nr = if (plastic > 0f) near else null
         val res = IntArray(w * h)
         for (i in res.indices) {
             val p = px[i]
             val l = lum[i]
             val t = 2f * l - 1f
             val mid = 0.25f + 0.75f * (1f - t * t)          // Mitteltöne am stärksten, Lichter/Tiefen sanft
-            val dv = k * detail[i] * mid * 255f
-            val r = (((p shr 16) and 255) + dv).toInt().coerceIn(0, 255)
-            val g = (((p shr 8) and 255) + dv).toInt().coerceIn(0, 255)
-            val b = ((p and 255) + dv).toInt().coerceIn(0, 255)
+            var r0 = ((p shr 16) and 255).toFloat()
+            var g0 = ((p shr 8) and 255).toFloat()
+            var b0 = (p and 255).toFloat()
+            var gain = k
+            if (nr != null) {
+                val n = nr[i]
+                // nah: bis zu +1 Klarheit dazu, fern: Klarheit bis auf 0 zurück
+                gain = max(0f, k * (1f + plastic * (2f * n - 1f)) + plastic * PLASTIC_NEAR * n)
+                // fern: leichter Dunst (heller, flacher, etwas entsättigt)
+                val f = plastic * HAZE * (1f - n) * (1f - n)
+                r0 += f * (HAZE_TONE - r0); g0 += f * (HAZE_TONE - g0); b0 += f * (HAZE_TONE - b0)
+            }
+            val dv = gain * detail[i] * mid * 255f
+            val r = (r0 + dv).toInt().coerceIn(0, 255)
+            val g = (g0 + dv).toInt().coerceIn(0, 255)
+            val b = (b0 + dv).toInt().coerceIn(0, 255)
             res[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
         }
         out.setPixels(res, 0, w, 0, 0, w, h)
@@ -48,6 +72,11 @@ class Clarity(src: Bitmap) {
     companion object {
         /** Verstärkung des Details bei voller Stärke */
         const val MAX_GAIN = 1.5f
+        /** Plastizität: zusätzliche Detailverstärkung ganz vorn bei voller Stärke */
+        private const val PLASTIC_NEAR = 0.8f
+        /** Plastizität: Dunst ganz hinten bei voller Stärke (Anteil Richtung Dunst-Ton) */
+        private const val HAZE = 0.12f
+        private const val HAZE_TONE = 225f
         private const val SUB = 4
 
         fun detailLayer(l: FloatArray, w: Int, h: Int): FloatArray {

@@ -30,6 +30,7 @@ Experimentelle KI-Zoom-Kamera für Android (getestet auf Poco X7 Pro).
 ## KI-Modelle
 
 - `drunet256.onnx` – *DRUNet* (Graustufen) aus [DPIR/KAIR](https://github.com/cszn/KAIR) von Kai Zhang (MIT-Lizenz), umgewandelt mit `tools/export_drunet.py` – für das KI-Entschärfen mit bekannter Unschärfe
+- `midas256.onnx` – *MiDaS v2.1 small* aus [isl-org/MiDaS](https://github.com/isl-org/MiDaS) von René Ranftl u. a. (MIT-Lizenz), Gewichte fp16 mit `tools/export_midas.py` – Tiefenkarte für Plastizität und 3D
 
 Die Hochskalier-Modelle stammen von [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) (BSD-3-Clause, © Xintao Wang):
 

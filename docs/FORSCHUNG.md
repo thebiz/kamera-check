@@ -587,6 +587,28 @@ zählen kaum, und aufhellen ist enger gedeckelt (≈ 6 Stufen) als abdunkeln (�
 Am Screenshot nachgerechnet: Struktur reicht jetzt bis an die Buchstaben, kein heller Rand.
 Startwert 20 % (Johns Wert bleibt gespeichert).
 
+**Guter Stand gesichert (15.11.2026, abends):** Johns Urteil nach weiteren Fotos: „Die Qualität ist
+wirklich beachtlich … ein Unterschied wie Tag und Nacht zur normalen Handykamera, die künstlich wirkt.“
+Version 1.16.1 ist als Zweig `guter-stand-2026-11-15` gesichert; ihre APK bleibt dauerhaft unter
+Release v51 abrufbar. Alles Neue danach ist abschaltbar und standardmäßig aus – die Bildrechnung
+selbst bleibt unverändert.
+
+**Plastizität und 3D (Version 1.17, Johns Idee):** Ein Foto ist flach, unser Auge liest Tiefe aber aus
+Hinweisen: Nahes ist kontrastreicher, Fernes weicher und dunstiger (Luftperspektive). Dazu braucht
+die App eine **Tiefenkarte** – geschätzt aus dem einen Bild mit **MiDaS v2.1 small** (Ranftl et al.,
+MIT-Lizenz; 256 × 256, fp16-Gewichte, 33 MB, auf dem Handy wenige Sekunden). Sie kennt keine Meter,
+nur „was liegt vor was“.
+- **Regler „Plastizität (Tiefe)“** im Viewer: nah bis zu doppelte Klarheit plus Extra-Mikrokontrast,
+  fern Klarheit zurück bis 0 und ein Hauch Dunst (heller, flacher). Standard: aus.
+- **„3D ansehen“**: das Ergebnis wird nach Tiefe in 10 weich ausgeblendete, kumulative Schichten zerlegt;
+  nahe Schichten wandern bei Bewegung stärker als ferne (wie die Facebook-3D-Fotos ab 2018). Läuft von
+  selbst im Kreis, mit dem Finger steuerbar. Kumulative Schichten vermeiden Löcher – an Vordergrundkanten
+  dehnt sich das Bild leicht.
+- Grenze, ehrlich: Bei starkem Zoom auf Fernes liegt fast alles gleich weit weg – dort bringt Tiefe wenig.
+  Gedacht für Szenen mit Vorder- und Hintergrund.
+Außerdem: Der runde Griff der Vergleichslinie sitzt jetzt am unteren Rand (Johns Wunsch: die Bildmitte
+ist das Motiv).
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -639,6 +661,7 @@ Startwert 20 % (Johns Wert bleibt gespeichert).
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.17 | Plastizität nach Tiefenkarte (MiDaS), 3D-Wackeln, Griff der Vergleichslinie unten; 1.16.1 gesichert |
 | 1.16.1 | Klarheit ohne glatten hellen Streifen an Kanten (weich gedeckelt, aufhellen enger), Start 20 % |
 | 1.16 | Regler „Klarheit“ im Viewer (kantenschonend, Mitteltöne), nach Johns Galerie-Test |
 | 1.15.1 | Knopf „In Galerie öffnen“ im Viewer, Vorschaubild lange drücken öffnet das Foto in der Galerie |

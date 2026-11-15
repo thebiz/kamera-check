@@ -131,7 +131,8 @@ class CompareView(ctx: Context) : View(ctx) {
 
         // Trennlinie mit Griff
         c.drawLine(dx, 0f, dx, height.toFloat(), linePaint)
-        val cy = height / 2f
+        // Griff unten am Rand – die Bildmitte (meist das Motiv) bleibt frei (Johns Wunsch)
+        val cy = height - 34f * d
         c.drawCircle(dx, cy, 18f * d, handlePaint)
         c.drawText("‹ ›", dx, cy + 5.5f * d, arrowPaint)
 
