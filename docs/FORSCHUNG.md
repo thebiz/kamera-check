@@ -506,6 +506,17 @@ hochauflösenden Mittelteil des Sensors schon hat (818 × 614). RAW-Super-Resolu
 auf vollen 50-MP-Rohdaten – die gibt das Handy ohne Root nicht her. Lehre: **Mehr Bilder auf
 gröberem Raster schlagen nicht weniger Bilder auf feinerem Raster.**
 
+**Nächster Versuch – feines Raster für A (Version 1.13):** Johns Frage „Wie verbessern wir die
+Qualität?“ Der Trick von B (Handzittern füllt ein feineres Raster) wird jetzt auf die *guten* Pixel
+angewendet: die 16 Bilder aus dem Kamera-Zoom. Bisher werden sie ausgerichtet und auf dem eigenen
+Raster gemittelt; neu trägt die App jedes Bild zusätzlich an seiner genauen (Bruchteil-)Position in
+ein doppelt so feines Raster ein – in einem Durchgang, Ausrichten und Aussortieren sind gemeinsam.
+Der Vergleich ist damit fairer als zuvor: **eine Serie, zweimal gerechnet** (A gemittelt, B fein),
+gleiche Bilder, gleiche Verwacklung. Danach beide mit „Schärfe zurückholen“ (Physik + DPIR); B mit
+Rausch-Korrektur für das feine Raster und entsprechend mehr Rechenzeit fürs Entfalten.
+Ehrliche Erwartung: Die Kamera hat diese Bilder schon entmosaikt (Farben ergänzt) und dabei leicht
+geglättet; ob das Handzittern darunter noch echte Feinheit liefert, muss der Test zeigen.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -558,6 +569,7 @@ gröberem Raster schlagen nicht weniger Bilder auf feinerem Raster.**
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.13 | Vergleich A/B neu: dieselbe Kamera-Zoom-Serie gemittelt (A) gegen feines Raster 2× (B) |
 | 1.12.1 | Gittermuster in B behoben (Rausch-Untergrenze für die KI), Knopf „Diagnose teilen“ |
 | 1.12 | Vergleich A/B: bisheriger Weg gegen RAW-Super-Resolution in einer Aufnahme |
 | 1.11.1 | 50-MP-Profil nur noch als Verlauf (Stärke aus dem Foto), Profil löschbar |

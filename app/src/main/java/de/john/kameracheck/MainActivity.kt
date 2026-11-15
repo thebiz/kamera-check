@@ -130,9 +130,10 @@ class MainActivity : Activity() {
      */
     private var ispZoomOn = true
     /**
-     * Vergleich A/B: ein Druck auf den Auslöser nimmt zwei Serien direkt nacheinander auf –
-     * A = bisheriger Weg (Kamera-Zoom + Mitteln), B = RAW-Super-Resolution (Handzittern füllt ein
-     * doppelt so feines Raster). Beide bekommen „Schärfe zurückholen“; Viewer und Diagnosebild zeigen
+     * Vergleich A/B: eine Serie, zweimal gerechnet – A = bisheriger Weg (Kamera-Zoom + Mitteln),
+     * B = dieselben Bilder an ihrer genauen Position in ein doppelt so feines Raster eingetragen
+     * (Handzittern füllt die Lücken; bis 1.12.1 war B die RAW-Serie, die bei 10× klar verlor).
+     * Beide bekommen „Schärfe zurückholen“; Viewer und Diagnosebild zeigen
      * sie nebeneinander. So muss sich jede Neuerung gegen den guten Weg beweisen (Johns Vorgabe).
      */
     private var compareOn = true
@@ -182,8 +183,8 @@ class MainActivity : Activity() {
         val diagPreview: Bitmap? = null, val diagRect: FloatArray? = null,
         /** Zoom, den der Bildprozessor des Handys selbst macht (1 = ganzes Sensorbild, Ausschnitt rechnen wir) */
         val isp: Float = 1f,
-        /** Vergleich A/B: 0 = aus, 1 = Teil A (Kamera-Zoom), 2 = Teil B (RAW-Super-Resolution) */
-        val compareStage: Int = 0,
+        /** Vergleich A/B: 0 = aus, 1 = Teil A (Kamera-Zoom, gemittelt), 2 = Teil B (dieselbe Serie auf feinem Raster) */
+        var compareStage: Int = 0,
     ) {
         val yuv = java.util.TreeMap<Long, Frame>()
         val raw = java.util.TreeMap<Long, ShortArray>()
@@ -1267,7 +1268,7 @@ class MainActivity : Activity() {
         val calibNow = calibStep >= 0
         val stage = when {
             stage0 == 2 -> 2
-            compareOn && ispZoomOn && !calibNow && z >= 2f && rawReader != null -> 1
+            compareOn && ispZoomOn && !calibNow && z >= 2f -> 1
             else -> 0
         }
         if (stage == 1) compareA = null
@@ -1440,14 +1441,6 @@ class MainActivity : Activity() {
         col.raw.clear()
         col.results.clear()
 
-        // Vergleich A/B: direkt nach Teil A die RAW-Serie hinterher, solange das Handy noch auf das Motiv zeigt
-        if (col.compareStage == 1) {
-            runOnUiThread {
-                holdLabel.text = "Teil 1 fertig – weiter ruhig halten (Teil 2: RAW) …"
-                holdLabel.visibility = View.VISIBLE
-                shutter.postDelayed({ shoot(2) }, 500)
-            }
-        } else
         // Aufnahme fertig: kurz vibrieren, Handy darf bewegt werden
         runOnUiThread {
             shutter.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
@@ -1463,13 +1456,14 @@ class MainActivity : Activity() {
             pendingTrackStart = true
         }
 
-        aiWorker.execute {
+        // Vergleich: Teil B rechnet dieselbe Serie danach auf dem feinen Raster (pre)
+        fun job(pre: de.john.kameracheck.Result?) {
             try {
                 val r = col.region
 
                 // 1. YUV-Serie ausrichten und mitteln (Farbe, Helligkeits-Referenz)
                 val yuvShake = if (!col.withRaw) shakeWeights(yuvKeys, col.results) else null
-                val res = SuperRes.process(frames, r, yuvShake?.first) { showStatus(it) }
+                val res = pre ?: SuperRes.process(frames, r, yuvShake?.first, fineU = if (col.compareStage == 1) 2 else 0) { showStatus(it) }
 
                 // Diagnose: jeden Rechenschritt am selben Ausschnitt festhalten
                 val diag = ArrayList<Pair<String, Bitmap>>()
@@ -1485,7 +1479,7 @@ class MainActivity : Activity() {
                 var real: Bitmap = res.merged
                 var srNote = ""
                 var half = false
-                var gridU = 1f
+                var gridU = if (pre != null) 2f else 1f
                 lastShakePx = 0f
                 val info = ArrayList<String>()
                 info += "${fmt(col.zoomAtShot)}× Zoom" + if (col.isp > 1f)
@@ -1508,7 +1502,7 @@ class MainActivity : Activity() {
                             res.merged.recycle()
                             res.single.recycle()
                             handleCalibResult(col, out)
-                            return@execute
+                            return
                         }
                         real = SuperRes.toBitmap(out.y, res.chroma, r, out.u, out.wo, out.ho)
                         res.merged.recycle()
@@ -1525,8 +1519,9 @@ class MainActivity : Activity() {
 
                 if (col.calibBox != null) {
                     calibMessage("RAW-Bilder waren nicht verfügbar – bitte nochmal auslösen.")
-                    return@execute
+                    return
                 }
+                if (pre != null) info += "Feines Raster 2×: dieselben Bilder an ihrer genauen Position eingetragen (Handzittern)"
                 if (!half) {
                     info += "${res.used} von ${res.total} Bildern verrechnet, kachelweise ausgerichtet" +
                         (if (SuperRes.dropped > 0) " (${SuperRes.dropped} unscharf/verrutscht aussortiert)" else "")
@@ -1575,7 +1570,7 @@ class MainActivity : Activity() {
 
                 // 5. Physikalisch entschärfen (nichts erfinden, nur Gedämpftes zurückholen)
                 val tDec = SystemClock.elapsedRealtime()
-                val (sharp, decIters) = deblurBitmap(real, sx, sy, if (strongOn) 150 else 80, if (strongOn) 60_000L else 25_000L, sigmaMap) { pct ->
+                val (sharp, decIters) = deblurBitmap(real, sx, sy, if (strongOn) 150 else 80, (if (strongOn) 60_000L else 25_000L) * (gridU * gridU).toLong(), sigmaMap) { pct ->
                     showStatus("Schärfe zurückholen … $pct %")
                 }
                 info += "Schärfe zurückgeholt (Physik): $decIters Durchgänge (Richardson-Lucy mit Kantenschutz, starke Kanten gebremst)"
@@ -1666,10 +1661,17 @@ class MainActivity : Activity() {
                 }
                 if (col.compareStage == 1 && kCopy != null) {
                     // Teil A gerechnet: merken, Teil B (schon aufgenommen) rechnet gleich danach
-                    compareA = CompareA(kCopy, diag.toList(), info.toList())
-                    mix.recycle()
-                    showStatus("Teil A fertig – rechne Teil B (RAW-Super-Resolution) …")
-                    return@execute
+                    val fine = res.fine
+                    res.fine = null
+                    if (fine != null) {
+                        compareA = CompareA(kCopy, diag.toList(), info.toList())
+                        mix.recycle()
+                        showStatus("A fertig – rechne B (feines Raster) …")
+                        col.compareStage = 2
+                        job(fine)
+                        return
+                    }
+                    kCopy.recycle()
                 }
                 if (col.compareStage == 2 && kCopy != null) {
                     finishCompare(kCopy, diag, info, stamp, tag)
@@ -1696,18 +1698,16 @@ class MainActivity : Activity() {
                 compareA = null
                 showStatus("Fehler: ${e.message}")
             } finally {
-                // Teil A: Teil B läuft noch – erst danach frei
-                if (!(col.compareStage == 1 && compareA != null)) {
-                    busy = false
-                    runOnUiThread { shutter.mode = ShutterView.Mode.IDLE }
-                    status.postDelayed({ if (!busy) showStatus(null) }, 5000)
-                }
+                busy = false
+                runOnUiThread { shutter.mode = ShutterView.Mode.IDLE }
+                status.postDelayed({ if (!busy) showStatus(null) }, 5000)
             }
         }
+        aiWorker.execute { job(null) }
     }
 
     /**
-     * Vergleich A/B zusammenführen: Viewer links/0 % = A (bisheriger Weg), 100 % = B (RAW-Super-Resolution),
+     * Vergleich A/B zusammenführen: Viewer links/0 % = A (bisheriger Weg), 100 % = B (feines Raster),
      * ein gemeinsames Diagnosebild mit den entscheidenden Kacheln beider Wege.
      */
     private fun finishCompare(bImg: Bitmap, diagB: List<Pair<String, Bitmap>>, infoB: List<String>, stamp: String, tag: String) {
@@ -1722,23 +1722,23 @@ class MainActivity : Activity() {
         cacheJpeg(aS, ViewerActivity.NORMAL)
         cacheJpeg(aS, ViewerActivity.REAL)
         cacheJpeg(bS, ViewerActivity.KI)
-        ViewerActivity.saveToGallery(this, bS, "zoom_${stamp}_${tag}_B-raw")
+        ViewerActivity.saveToGallery(this, bS, "zoom_${stamp}_${tag}_B-fein")
         ViewerActivity.startMix = 100
         val info = ArrayList<String>()
-        info += "VERGLEICH · links = A (bisheriger Weg) · rechts: Regler 0 % = A, 100 % = B (RAW-Super-Resolution)"
+        info += "VERGLEICH · links = A (bisheriger Weg) · rechts: Regler 0 % = A, 100 % = B (feines Raster)"
         info += "„Echt ⇄ KI umschalten“ springt rechts zwischen A und B"
-        info += "── A: Kamera-Zoom + Mitteln + Schärfe zurückholen ──"
+        info += "── A: Kamera-Zoom + Mitteln + Schärfe zurückholen (dieselben Bilder wie B) ──"
         info += a.info
-        info += "── B: RAW-Super-Resolution + Schärfe zurückholen ──"
+        info += "── B: Kamera-Zoom + feines Raster 2× + Schärfe zurückholen ──"
         info += infoB
         File(cacheDir, ViewerActivity.INFO).writeText(info.joinToString("\n"))
-        // Diagnosebild: Vorschau, A gemittelt, B RAW-SR, B Physik, A Ergebnis, B Ergebnis
+        // Diagnosebild: Vorschau, A gemittelt, B feines Raster, B Physik, A Ergebnis, B Ergebnis
         fun pick(list: List<Pair<String, Bitmap>>, prefix: String, label: String) =
             list.firstOrNull { it.first.startsWith(prefix) }?.let { label to it.second }
         val tiles = listOfNotNull(
             pick(a.tiles, "1", "Vorschau (Handy-Bildprozessor)"),
             pick(a.tiles, "3", "A · Kamera-Zoom, gemittelt"),
-            pick(diagB, "4", "B · RAW-Super-Resolution"),
+            pick(diagB, "3", "B · feines Raster 2×"),
             pick(diagB, "5", "B · + Schärfe (Physik)"),
             pick(a.tiles, "6", "A · Ergebnis (KI)"),
             pick(diagB, "6", "B · Ergebnis (KI)"),
@@ -2200,7 +2200,7 @@ class MainActivity : Activity() {
         if (profile != null) m.menu.add(0, 2, 2, "Kalibrierung löschen")
         m.menu.add(0, 5, 3, if (diagOn) "Diagnosebild: an ✓" else "Diagnosebild: aus")
         m.menu.add(0, 6, 4, if (ispZoomOn) "Quelle: Kamera-Zoom ✓" else "Quelle: ganzes Sensorbild + RAW")
-        m.menu.add(0, 11, 5, if (compareOn) "Vergleich A/B (RAW-Super-Resolution): an ✓" else "Vergleich A/B: aus")
+        m.menu.add(0, 11, 5, if (compareOn) "Vergleich A/B (feines Raster): an ✓" else "Vergleich A/B: aus")
         m.menu.add(0, 7, 5, "Fotos importieren …")
         m.menu.add(0, 3, 6, "Kamera-Check")
         m.setOnMenuItemClickListener {
@@ -2228,7 +2228,7 @@ class MainActivity : Activity() {
                 11 -> {
                     compareOn = !compareOn
                     getPreferences(MODE_PRIVATE).edit().putBoolean("compare", compareOn).apply()
-                    showStatus(if (compareOn) "Vergleich an: jedes Foto ab 2× zweimal – A bisher, B RAW-Super-Resolution" else "Vergleich aus")
+                    showStatus(if (compareOn) "Vergleich an: jedes Foto ab 2× zweimal gerechnet – A bisher, B feines Raster" else "Vergleich aus")
                     status.postDelayed({ if (!busy) showStatus(null) }, 3000)
                 }
                 6 -> {
