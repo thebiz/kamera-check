@@ -27,12 +27,12 @@ object Calib {
     }
 
     class Wedge(
-        /** gemessene Werte der 11 Stufen, von dunkel nach hell (relativ) */
-        val levels: FloatArray,
         /** Bestimmtheitsmaß der Geraden Messwert ↔ Licht (1 = perfekt linear) */
         val r2: Float,
         /** Rest-Helligkeit bei Schwarz relativ zu Weiß (Streulicht, Spiegelung, Schwarzwert-Fehler) */
         val flare: Float,
+        /** Anzahl Stufen, die in die Gerade eingingen (überbelichtete Stufen zählen nicht) */
+        val used: Int,
     )
 
     /** Leuchtdichte der 11 Graustufen, wie die Testmuster-Seite sie zeigt (8-Bit-gerundet, sRGB). */
@@ -80,40 +80,35 @@ object Calib {
 
     // ───────────────────────── Graustufen ─────────────────────────
 
-    /** y = lineares Helligkeitsbild im Messrahmen. Sucht die 11 Stufen waagerecht oder senkrecht. */
+    /**
+     * y = lineares Helligkeitsbild im Messrahmen. Sucht die 11 Stufen waagerecht oder senkrecht.
+     * Robust gegen Schräglage (schmale Streifen statt ganzer Breite), Perspektive (ungleich breite
+     * Stufen) und Überbelichtung (oben verschmolzene, abgeschnittene Stufen werden nicht gewertet).
+     */
     fun analyzeWedge(y: FloatArray, w: Int, h: Int): Wedge? {
-        val cols = FloatArray(w)
-        val r0 = h / 5
-        val r1 = h - h / 5
-        for (x in 0 until w) {
-            var s = 0f
-            for (yy in r0 until r1) s += y[yy * w + x]
-            cols[x] = s / (r1 - r0)
+        var best: Pair<Wedge, Float>? = null
+        for (vertical in listOf(false, true)) {
+            val len = if (vertical) h else w
+            val across = if (vertical) w else h
+            val thick = max(4, across / 12)
+            for (pos in listOf(0.5f, 0.38f, 0.62f, 0.27f, 0.73f)) {
+                val c0 = ((across * pos).toInt() - thick / 2).coerceIn(0, across - thick)
+                val prof = FloatArray(len) { i ->
+                    var s = 0f
+                    for (k in c0 until c0 + thick) s += if (vertical) y[i * w + k] else y[k * w + i]
+                    s / thick
+                }
+                val r = findSteps(prof) ?: continue
+                if (best == null || r.second > best.second) best = r
+            }
         }
-        val rows = FloatArray(h)
-        val c0 = w / 5
-        val c1 = w - w / 5
-        for (yy in 0 until h) {
-            var s = 0f
-            for (x in c0 until c1) s += y[yy * w + x]
-            rows[yy] = s / (c1 - c0)
-        }
-        val a = findSteps(cols)
-        val b = findSteps(rows)
-        val levels = when {
-            a == null && b == null -> return null
-            a == null -> b!!.first
-            b == null -> a.first
-            else -> if (a.second >= b.second) a.first else b.first
-        }
-        return fit(levels)
+        return best?.first
     }
 
-    /** Findet 11 aufeinanderfolgende, gleichmäßig ansteigende (oder fallende) Stufen. Liefert Stufen + Güte. */
-    private fun findSteps(p0: FloatArray): Pair<FloatArray, Float>? {
+    /** Sucht die Stufentreppe in einem Helligkeitsverlauf. Liefert Ergebnis + Güte (erkannte Breite). */
+    private fun findSteps(p0: FloatArray): Pair<Wedge, Float>? {
         val n = p0.size
         if (n < 60) return null
-        // leicht glätten
         val p = FloatArray(n) { i ->
             var s = 0f
             var c = 0
@@ -125,20 +120,16 @@ object Calib {
         if (range <= 1e-6f) return null
         val k = max(2, n / 200)
         val d = FloatArray(n) { i -> abs(p[min(n - 1, i + k)] - p[max(0, i - k)]) }
-        val thr = 0.35f * range / 10f
-        val minGap = max(3, n / 45)
-        // Kanten: lokale Maxima der Änderung
+        val thr = 0.3f * range / 10f
+        val minGap = max(3, n / 60)
         val edges = ArrayList<Int>()
-        var i = 1
-        while (i < n - 1) {
+        for (i in 1 until n - 1) {
             if (d[i] > thr && d[i] >= d[i - 1] && d[i] >= d[i + 1]) {
                 if (edges.isNotEmpty() && i - edges.last() < minGap) {
                     if (d[i] > d[edges.last()]) edges[edges.size - 1] = i
                 } else edges += i
             }
-            i++
         }
-        // Abschnitte zwischen den Kanten
         val bounds = listOf(0) + edges + listOf(n)
         val segs = ArrayList<FloatArray>() // [start, end, median]
         for (s in 0 until bounds.size - 1) {
@@ -150,25 +141,52 @@ object Calib {
             if (inner.isEmpty()) continue
             segs += floatArrayOf(a.toFloat(), b.toFloat(), inner[inner.size / 2])
         }
-        var best: Pair<FloatArray, Float>? = null
-        for (start in 0..segs.size - 11) {
-            val run = segs.subList(start, start + 11)
-            val vals = FloatArray(11) { run[it][2] }
-            val up = (1 until 11).all { vals[it] > vals[it - 1] }
-            val down = (1 until 11).all { vals[it] < vals[it - 1] }
-            if (!up && !down) continue
-            // innere 9 Stufen ähnlich breit (Randstufen dürfen angeschnitten sein)
-            val widths = (1 until 10).map { run[it][1] - run[it][0] }
-            if (widths.max() > widths.min() * 1.7f) continue
-            val width = run.last()[1] - run.first()[0]
-            val levels = if (up) vals else vals.reversedArray()
-            if (best == null || width > best.second) best = levels to width
+        if (segs.size < 7) return null
+
+        var best: Pair<Wedge, Float>? = null
+        // Läufe von 11 bis 7 Abschnitten: bei Überbelichtung verschmelzen die hellsten Stufen zu einem
+        for (len in 11 downTo 7) {
+            for (start in 0..segs.size - len) {
+                val run0 = segs.subList(start, start + len)
+                val asc = (1 until len).all { run0[it][2] > run0[it - 1][2] }
+                val desc = (1 until len).all { run0[it][2] < run0[it - 1][2] }
+                if (!asc && !desc) continue
+                val run = if (asc) run0.toList() else run0.reversed()
+                // innere Abschnitte = saubere einzelne Stufen, ähnlich breit (Perspektive bis Faktor 2,2)
+                val innerW = (1 until len - 1).map { run[it][1] - run[it][0] }
+                if (innerW.max() > innerW.min() * 2.2f) continue
+                val medW = innerW.sorted()[innerW.size / 2]
+                val needed = 11 - (len - 2)          // Stufen, die auf die beiden Enden entfallen
+                val brightBands = needed - 1           // dunkles Ende = Stufe 0, Rest steckt im hellen Ende
+                val brightW = run.last()[1] - run.last()[0]
+                if (brightBands > 1 && brightW < (brightBands - 0.6f) * medW) continue
+                // Messpunkte: innere Stufen sicher, Enden nur wenn nicht verschmolzen/zu breit
+                val xs = ArrayList<Float>()
+                val ys = ArrayList<Float>()
+                val darkW = run.first()[1] - run.first()[0]
+                if (darkW < 1.5f * medW) { xs += WEDGE_LIGHT[0]; ys += run.first()[2] }
+                for (i in 1 until len - 1) { xs += WEDGE_LIGHT[i]; ys += run[i][2] }
+                if (brightBands == 1 && brightW < 1.5f * medW) { xs += WEDGE_LIGHT[len - 1]; ys += run.last()[2] }
+                // oben abgeschnittene Stufen (kaum noch Anstieg) weglassen
+                while (ys.size > 6) {
+                    val steps = (1 until ys.size).map { ys[it] - ys[it - 1] }.sorted()
+                    val med = steps[steps.size / 2]
+                    if (ys[ys.size - 1] - ys[ys.size - 2] < 0.4f * med) {
+                        xs.removeAt(xs.size - 1); ys.removeAt(ys.size - 1)
+                    } else break
+                }
+                if (ys.size < 6) continue
+                val wdg = fit(xs.toFloatArray(), ys.toFloatArray())
+                if (wdg.r2 < 0.97f) continue
+                val q = len * 1000f + (run.last()[1] - run.first()[0])
+                if (best == null || q > best.second) best = wdg to q
+            }
+            if (best != null) break
         }
         return best
     }
 
-    private fun fit(levels: FloatArray): Wedge {
-        val x = WEDGE_LIGHT
+    private fun fit(x: FloatArray, levels: FloatArray): Wedge {
         val n = levels.size
         val mx = x.average().toFloat()
         val my = levels.average().toFloat()
@@ -184,8 +202,7 @@ object Calib {
         val offset = my - slope * mx
         val r2 = if (syy > 0f) (sxy * sxy) / (sxx * syy) else 0f
         val flare = (offset / max(1e-6f, offset + slope)).coerceIn(-1f, 1f)
-        val rel = FloatArray(n) { levels[it] / max(1e-6f, levels.max()) }
-        return Wedge(rel, r2, flare)
+        return Wedge(r2, flare, n)
     }
 
     // ───────────────────────── Profil ─────────────────────────

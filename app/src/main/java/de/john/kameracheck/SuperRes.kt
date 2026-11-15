@@ -31,6 +31,30 @@ class Region(
             val y1 = min(sh, cy + ch + m)
             return Region(sw, sh, x0, y0, (x1 - x0) / 2 * 2, (y1 - y0) / 2 * 2, cx, cy, cw, ch)
         }
+
+        /**
+         * Nur ein Teil des Zoom-Ausschnitts (box = x0, y0, x1, y1 als Anteile davon) – für die Kalibrierung:
+         * weniger Pixel auslesen und verrechnen, dadurch viel schneller.
+         */
+        fun forBox(sw: Int, sh: Int, zoom: Float, box: FloatArray): Region {
+            val base = compute(sw, sh, zoom)
+            // etwas Luft um den Rahmen, falls das Handy beim Auslösen leicht wandert
+            val pad = 0.06f
+            val bx0 = (box[0] - pad).coerceIn(0f, 1f)
+            val by0 = (box[1] - pad).coerceIn(0f, 1f)
+            val bx1 = (box[2] + pad).coerceIn(0f, 1f)
+            val by1 = (box[3] + pad).coerceIn(0f, 1f)
+            val cw = max(64, ((bx1 - bx0) * base.cw).roundToInt() / 2 * 2)
+            val ch = max(64, ((by1 - by0) * base.ch).roundToInt() / 2 * 2)
+            val cx = (base.cx + (bx0 * base.cw).roundToInt()).coerceIn(0, sw - cw) / 2 * 2
+            val cy = (base.cy + (by0 * base.ch).roundToInt()).coerceIn(0, sh - ch) / 2 * 2
+            val m = 64
+            val x0 = max(0, cx - m) / 2 * 2
+            val y0 = max(0, cy - m) / 2 * 2
+            val x1 = min(sw, cx + cw + m)
+            val y1 = min(sh, cy + ch + m)
+            return Region(sw, sh, x0, y0, (x1 - x0) / 2 * 2, (y1 - y0) / 2 * 2, cx, cy, cw, ch)
+        }
     }
 }
 

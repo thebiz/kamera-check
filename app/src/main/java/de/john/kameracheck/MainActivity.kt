@@ -122,6 +122,9 @@ class MainActivity : Activity() {
     private lateinit var calibBar: LinearLayout
     private lateinit var calibText: TextView
     private lateinit var calibSecondary: TextView
+    private lateinit var calibStatus: TextView
+    /** Normale Bedienelemente, die während der Kalibrierung ausgeblendet werden */
+    private val normalControls = ArrayList<View>()
     @Volatile private var profile: SharpProfile? = null
 
     private class SharpProfile(val samples: List<Calib.Sample>, val r2: Float?, val flare: Float?, val date: String)
@@ -149,6 +152,8 @@ class MainActivity : Activity() {
         val region: Region, val count: Int, val zoomAtShot: Float, val rotation: Int, val withRaw: Boolean,
         /** Kalibrierung: Schritt und Messrahmen im Ergebnis (Anteile x0, y0, x1, y1, Sensor-Ausrichtung) */
         val calibStep: Int = -1, val calibBox: FloatArray? = null,
+        /** Zielrahmen als Anteile des (verkleinerten) Ausschnitts – nur dort wird gemessen */
+        val keepBox: FloatArray? = null,
     ) {
         val yuv = java.util.TreeMap<Long, Frame>()
         val raw = java.util.TreeMap<Long, ShortArray>()
@@ -306,6 +311,7 @@ class MainActivity : Activity() {
             background = chipBg(false)
             setOnClickListener { v -> showMoreMenu(v) }
         }
+        normalControls += info
         previewBox.addView(info, FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.TOP).apply {
             topMargin = dp(12f); rightMargin = dp(12f)
         })
@@ -317,6 +323,7 @@ class MainActivity : Activity() {
             setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
             setOnClickListener { toggleStrong() }
         }
+        normalControls += strongChip
         previewBox.addView(strongChip, FrameLayout.LayoutParams(-2, -2, Gravity.START or Gravity.TOP).apply {
             topMargin = dp(12f); leftMargin = dp(12f)
         })
@@ -384,6 +391,7 @@ class MainActivity : Activity() {
         mfChip = chip("Manueller Fokus") { toggleManual() }
         chips2.addView(mfChip, chipParams())
         panel.addView(chips2, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8f) })
+        normalControls += listOf(zoomLabel, seek, chips, chips2)
 
         // Manueller Fokus: schwebt über der Vorschau, damit das Bedienfeld nicht zusammengedrückt wird
         mfRow = LinearLayout(this).apply {
@@ -454,10 +462,12 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
         }
         panel.addView(hint, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10f) })
+        normalControls += hint
 
         root.addView(panel, LinearLayout.LayoutParams(-1, -2))
 
-        // Kalibrier-Leiste: Anweisung + Abbrechen/Überspringen (überdeckt Zoom und Chips während der Kalibrierung)
+        // Kalibrier-Leiste im Bedienfeld unter der Vorschau (ersetzt Zoom und Chips während der Kalibrierung),
+        // damit nichts über dem grünen Zielrahmen liegt
         calibBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16f), dp(10f), dp(16f), dp(10f))
@@ -475,6 +485,13 @@ class MainActivity : Activity() {
             setLineSpacing(0f, 1.2f)
         }
         calibBar.addView(calibText)
+        calibStatus = TextView(this).apply {
+            setTextColor(0xFFFFD27A.toInt())
+            textSize = 14f
+            setPadding(0, dp(6f), 0, 0)
+            visibility = View.GONE
+        }
+        calibBar.addView(calibStatus)
         calibSecondary = TextView(this).apply {
             setTextColor(0xFF5BE38A.toInt())
             textSize = 14f
@@ -482,9 +499,7 @@ class MainActivity : Activity() {
             setOnClickListener { calibSecondaryAction() }
         }
         calibBar.addView(calibSecondary)
-        previewBox.addView(calibBar, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply {
-            topMargin = dp(52f); leftMargin = dp(12f); rightMargin = dp(12f)
-        })
+        panel.addView(calibBar, 0, LinearLayout.LayoutParams(-1, -2))
         setContentView(root)
 
         texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -608,7 +623,12 @@ class MainActivity : Activity() {
     }
 
     private fun showStatus(text: String?) = runOnUiThread {
-        if (text == null) status.visibility = View.GONE
+        if (calibStep >= 0) {
+            // im Kalibrier-Modus unten im Bedienfeld anzeigen, nicht über dem Zielrahmen
+            status.visibility = View.GONE
+            calibStatus.text = text ?: ""
+            calibStatus.visibility = if (text == null) View.GONE else View.VISIBLE
+        } else if (text == null) status.visibility = View.GONE
         else {
             status.text = text
             status.visibility = View.VISIBLE
@@ -871,6 +891,14 @@ class MainActivity : Activity() {
         }
         // Belichtung am Fokuspunkt messen
         afRegion?.let { b.set(CaptureRequest.CONTROL_AE_REGIONS, arrayOf(it)) }
+        // Kalibrieren: 1 Blende knapper belichten, damit Weiß (iPad) nicht ausbrennt
+        if (calibStep >= 0) {
+            val step = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
+            val range = chars?.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+            if (step > 0f && range != null) {
+                b.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, (-1f / step).roundToInt().coerceIn(range.lower, range.upper))
+            }
+        }
         val ois = chars?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
         if (ois?.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON) == true) {
             b.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
@@ -1189,11 +1217,28 @@ class MainActivity : Activity() {
         val z = zoom
         val withRaw = z >= 2f && rawReader != null
         // RAW: so viele Bilder, wie ins Speicherbudget passen (8 bis 30)
-        val region = Region.compute(yuvSize.width, yuvSize.height, z)
+        // Kalibrieren: nur den Zielrahmen (plus Rand) auslesen und 12 Bilder – viel schneller
+        val calibBox = if (calibStep >= 0) calibBoxCrop() else null
+        val region = if (calibBox != null) Region.forBox(yuvSize.width, yuvSize.height, z, calibBox)
+            else Region.compute(yuvSize.width, yuvSize.height, z)
         val rawBytes = region.rw.toLong() * region.rh * 2
-        val count = if (withRaw) (RAW_BUDGET / rawBytes).toInt().coerceIn(8, 30) else if (z >= 2f) 16 else 8
+        val count = when {
+            calibBox != null -> 12
+            withRaw -> (RAW_BUDGET / rawBytes).toInt().coerceIn(8, 30)
+            z >= 2f -> 16
+            else -> 8
+        }
         val rotation = (sensorOrientation + deviceOrientation) % 360
-        val col = Collector(region, count, z, rotation, withRaw, calibStep, if (calibStep >= 0) calibBoxCrop() else null)
+        val keepBox = calibBox?.let { b ->
+            val base = Region.compute(yuvSize.width, yuvSize.height, z)
+            floatArrayOf(
+                ((base.cx + b[0] * base.cw - region.cx) / region.cw).coerceIn(0f, 1f),
+                ((base.cy + b[1] * base.ch - region.cy) / region.ch).coerceIn(0f, 1f),
+                ((base.cx + b[2] * base.cw - region.cx) / region.cw).coerceIn(0f, 1f),
+                ((base.cy + b[3] * base.ch - region.cy) / region.ch).coerceIn(0f, 1f),
+            )
+        }
+        val col = Collector(region, count, z, rotation, withRaw, calibStep, calibBox, keepBox)
         collecting = col
         showStatus(null)
         showHold("Ruhig halten …")
@@ -1252,7 +1297,10 @@ class MainActivity : Activity() {
     }
 
     private fun showHold(text: String?) = runOnUiThread {
-        if (text == null) holdLabel.visibility = View.GONE
+        if (calibStep >= 0) {
+            holdLabel.visibility = View.GONE
+            if (text != null) { calibStatus.text = text; calibStatus.visibility = View.VISIBLE }
+        } else if (text == null) holdLabel.visibility = View.GONE
         else {
             holdLabel.text = text
             holdLabel.visibility = View.VISIBLE
@@ -1314,8 +1362,13 @@ class MainActivity : Activity() {
         runOnUiThread {
             shutter.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
             shutter.mode = ShutterView.Mode.PROCESSING
-            holdLabel.text = "✓ Fertig – du kannst loslassen"
-            holdLabel.visibility = View.VISIBLE
+            if (col.calibBox != null) {
+                calibStatus.text = "✓ Aufgenommen – wird vermessen …"
+                calibStatus.visibility = View.VISIBLE
+            } else {
+                holdLabel.text = "✓ Fertig – du kannst loslassen"
+                holdLabel.visibility = View.VISIBLE
+            }
             holdLabel.postDelayed({ if (shutter.mode != ShutterView.Mode.CAPTURING) holdLabel.visibility = View.GONE }, 1800)
             pendingTrackStart = true
         }
@@ -1343,7 +1396,8 @@ class MainActivity : Activity() {
                         val rawRef = rawKeys.indices.minByOrNull { kotlin.math.abs(rawKeys[it] - refTs) } ?: 0
                         val shake = shakeWeights(rawKeys, col.results)
                         if (shake != null) srNote += " · ${shake.second}"
-                        val out = RawSR.run(raws, geo, rawParams(result), rawRef, res.refY, res.mergedY, 4, shake?.first, col.calibBox) {
+                        val out = RawSR.run(raws, geo, rawParams(result), rawRef, res.refY, res.mergedY, 4, shake?.first,
+                            col.keepBox) {
                             showStatus(it)
                         }
                         if (col.calibBox != null) {
@@ -1688,10 +1742,10 @@ class MainActivity : Activity() {
     /** Positionen des Zielrahmens (Mitte der Vorschau, dann die vier Ecken) */
     private val calibSpots = listOf(
         "Mitte" to (0.5f to 0.5f),
-        "oben links" to (0.22f to 0.17f),
-        "oben rechts" to (0.78f to 0.17f),
-        "unten links" to (0.22f to 0.83f),
-        "unten rechts" to (0.78f to 0.83f),
+        "oben links" to (0.23f to 0.2f),
+        "oben rechts" to (0.77f to 0.2f),
+        "unten links" to (0.23f to 0.8f),
+        "unten rechts" to (0.77f to 0.8f),
     )
 
     private fun showMoreMenu(anchor: View) {
@@ -1759,7 +1813,13 @@ class MainActivity : Activity() {
         setZoom(CALIB_ZOOM)
         lupeOn = false
         lupeBox.visibility = View.GONE
+        mfRow.visibility = View.GONE
         updateChips()
+        // nur der grüne Zielrahmen zählt: Bedienelemente und Fokusrahmen ausblenden
+        for (v in normalControls) v.visibility = View.GONE
+        focusView.visibility = View.INVISIBLE
+        status.visibility = View.GONE
+        startPreview() // Belichtungskorrektur aktivieren
         updateCalibUi(null)
     }
 
@@ -1768,7 +1828,11 @@ class MainActivity : Activity() {
         pendingCalibShot = false
         calibOverlay.center = null
         calibBar.visibility = View.GONE
+        calibStatus.visibility = View.GONE
+        for (v in normalControls) v.visibility = View.VISIBLE
+        focusView.visibility = View.VISIBLE
         clearFocusPoint()
+        startPreview()
     }
 
     /** Anweisung für den aktuellen Schritt; note = Ergebnis des vorigen Schritts */
@@ -1780,16 +1844,22 @@ class MainActivity : Activity() {
             calibOverlay.center = pos
             calibOverlay.label = "Schärfe-Muster · $name"
             calibText.text = head + "Schritt ${calibStep + 1} von 6 · Schärfe $name\n" +
-                "iPad mit dem Schärfe-Muster in den grünen Rahmen, dann auslösen."
+                "Halte das Handy so, dass das Schärfe-Muster im grünen Rahmen ${where(pos)} liegt, dann auslösen."
             calibSecondary.text = "Kalibrierung abbrechen"
         } else {
             calibOverlay.center = 0.5f to 0.5f
             calibOverlay.label = "Graustufen"
-            calibText.text = head + "Schritt 6 von 6 · Graustufen\n" +
-                "Einmal aufs iPad tippen (Graustufen), iPad in den Rahmen, auslösen."
-            calibSecondary.text = "Graustufen überspringen und speichern"
+            calibText.text = head + "Schritt 6 von 6 · Graustufen (freiwillig)\n" +
+                "Einmal aufs iPad tippen, damit es die Graustufen zeigt. Die Streifen in den Rahmen, auslösen – " +
+                "schräg oder nicht ganz drin ist ok."
+            calibSecondary.text = "Graustufen überspringen und Profil speichern"
         }
         calibBar.visibility = View.VISIBLE
+    }
+
+    private fun where(pos: Pair<Float, Float>): String = when {
+        pos.first == 0.5f -> "in der Mitte"
+        else -> (if (pos.second < 0.5f) "oben " else "unten ") + (if (pos.first < 0.5f) "links" else "rechts")
     }
 
     private fun calibSecondaryAction() {
@@ -1859,7 +1929,8 @@ class MainActivity : Activity() {
         } else {
             val y = FloatArray(bw * bh) { 0.25f * planes[0][it] + 0.5f * planes[1][it] + 0.25f * planes[2][it] }
             val wedge = Calib.analyzeWedge(y, bw, bh)
-                ?: return calibMessage("Graustufen nicht erkannt – zeigt das iPad die Graustufen und füllt es den Rahmen?")
+                ?: return calibMessage("Graustufen nicht erkannt. Nochmal versuchen (iPad etwas näher, gerade halten) – " +
+                    "oder unten „überspringen“, das Schärfeprofil ist schon vollständig.")
             saveProfile(wedge)
         }
     }

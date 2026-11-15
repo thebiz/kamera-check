@@ -22,7 +22,7 @@ herausholen, statt es nur hübsch zu erfinden.
 
 ---
 
-## 2. Die Rechenkette (Version 1.1)
+## 2. Die Rechenkette (Version 1.2)
 
 Ein Druck auf den Auslöser löst diese Schritte aus:
 
@@ -151,6 +151,29 @@ Rot und Blau. Davon profitiert auch jedes normale Foto.
 Linearität R² = 1,0000; Graustufen werden waagerecht wie senkrecht und in beiden
 Richtungen erkannt, auch wenn die äußeren Stufen angeschnitten sind.
 
+**Erster echter Test (15.11.2026, Johns Rückmeldung) und Version 1.2:**
+
+| Problem beim echten Kalibrieren | Ursache | Lösung in 1.2 |
+|---|---|---|
+| Anweisungsfeld lag über dem Zielrahmen | Feld oben über der Vorschau | Anweisungen jetzt unten im Bedienfeld; Zoom-Regler, Chips und Fokusrahmen sind während der Kalibrierung ausgeblendet – im Bild ist nur noch der grüne Rahmen |
+| „oben links“ passte nicht zum Rahmen | Das Feld verdeckte den echten Rahmen oben, sichtbar war nur der grüne Fokusrahmen der vorigen Aufnahme | Fokusrahmen unsichtbar, Text nennt die Lage („im grünen Rahmen oben links“) |
+| „Graustufen nicht erkannt“ (4×) | Die Erkennung erwartete gerade, gleich breite Stufen über die ganze Rahmenbreite und kein Ausbrennen | schmale Mess-Streifen an 5 Stellen (Schräglage egal), Stufenbreite darf bis Faktor 2,2 schwanken (Perspektive), verschmolzene helle Stufen werden erkannt und weggelassen; Belichtung beim Kalibrieren 1 Blende knapper; Schritt lässt sich überspringen |
+| Dauerte zu lange | Ganzer 2×-Ausschnitt, bis zu 30 RAW-Bilder | nur der Rahmen plus Rand wird ausgelesen und verrechnet, 12 Bilder – etwa 5–10× weniger Rechnung |
+
+Simulation der Graustufen-Erkennung (`tools/sim/WedgeTest.kt`), Streulicht vorgegeben 2,91 %:
+
+| Fall | erkannt | Streulicht gemessen | Stufen genutzt |
+|---|---|---|---|
+| gerade | ✓ | 2,92 % | 11 |
+| 4° schräg | ✓ | 2,90 % | 11 |
+| überbelichtet (2 Stufen ausgebrannt) | ✓ | 2,91 % | 8 |
+| Perspektive 1 : 1,6 | ✓ | 2,91 % | 11 |
+| alles zusammen | ✓ | 2,91 % | 8 |
+
+Version 1.1 hatte schon „4° schräg“ und „überbelichtet“ nicht mehr erkannt – genau das,
+was in der Hand passiert. Lehre: **Testfälle müssen aus der echten Handhabung kommen**,
+nicht aus dem Idealfall.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -165,6 +188,7 @@ Richtungen erkannt, auch wenn die äußeren Stufen angeschnitten sind.
 | **Simulation ersetzt nicht das echte Foto** – Grafiker-Augen finden, was Zahlen übersehen | daraus: Version 1.0 setzt auf Physik statt Raten |
 | Bei ebenem Motiv muss alles gleich scharf sein; Ungleichmäßigkeit = Rechenfehler | Johns Hinweis; jetzt automatische Prüfung |
 | Die eigene Messmethode hatte einen festen Fehler (+0,5 px²) – sichtbar erst mit bekannten Testkanten | Kalibrier-Simulation, Version 1.1 |
+| Eine Erkennung, die nur den Idealfall kennt, scheitert in der Hand (Schräglage, Ausbrennen) | Johns 4 Fehlversuche mit den Graustufen; Version 1.2 |
 
 ---
 
@@ -196,4 +220,5 @@ Richtungen erkannt, auch wenn die äußeren Stufen angeschnitten sind.
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.2 | Kalibrierung überarbeitet: Anweisungen unten, robuste Graustufen-Erkennung (schräg, Perspektive, ausgebrannt), überspringbar, schneller (nur Rahmen, 12 Bilder), Belichtung −1 Blende |
 | 1.1 | Kalibrierung mit Testmuster auf dem iPad: Schärfeprofil je Bildbereich, Farbe und Richtung; Graustufen-Prüfung (Linearität, Streulicht); Messfehler der Kantenmessung korrigiert |
