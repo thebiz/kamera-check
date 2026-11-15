@@ -44,23 +44,30 @@ object Align {
         return out
     }
 
-    /** Liefert dx, dy, Fehler – so dass Bild(p) ≈ Referenz(p + d). */
-    fun align(refY: ByteArray, refS: IntArray, fy: ByteArray, w: Int, h: Int): FloatArray {
+    /**
+     * Liefert dx, dy, Fehler – so dass Bild(p) ≈ Referenz(p + d).
+     * (gx, gy) = Vorab-Schätzung in Pixeln (z. B. aus [alignLarge]); die Grobsuche läuft ±40 px darum.
+     */
+    fun align(refY: ByteArray, refS: IntArray, fy: ByteArray, w: Int, h: Int, gx: Int = 0, gy: Int = 0): FloatArray {
         val dw = w / 4
         val dh = h / 4
         val fs = downscale4(fy, w, h)
         val R = 10
+        val ox = Math.round(gx / 4f)
+        val oy = Math.round(gy / 4f)
 
         // Grob: auf Viertel-Auflösung
-        var bdx = 0
-        var bdy = 0
-        val wx0 = max(R + 1, dw / 2 - 160)
-        val wx1 = min(dw - R - 1, dw / 2 + 160)
-        val wy0 = max(R + 1, dh / 2 - 120)
-        val wy1 = min(dh - R - 1, dh / 2 + 120)
+        var bdx = ox
+        var bdy = oy
+        val mx = R + abs(ox) + 1
+        val my = R + abs(oy) + 1
+        val wx0 = max(mx, dw / 2 - 160)
+        val wx1 = min(dw - mx, dw / 2 + 160)
+        val wy0 = max(my, dh / 2 - 120)
+        val wy1 = min(dh - my, dh / 2 + 120)
         if (wx1 > wx0 && wy1 > wy0) {
             var best = Long.MAX_VALUE
-            for (ddy in -R..R) for (ddx in -R..R) {
+            for (ddy in oy - R..oy + R) for (ddx in ox - R..ox + R) {
                 var s = 0L
                 var y = wy0
                 while (y < wy1) {
@@ -85,7 +92,7 @@ object Align {
         val cdx = bdx * 4
         val cdy = bdy * 4
         val F = 4
-        val m = R * 4 + F + 2
+        val m = max(abs(cdx), abs(cdy)) + F + 2
         val fx0 = max(m, w / 2 - 256)
         val fx1 = min(w - m, w / 2 + 256)
         val fy0 = max(m, h / 2 - 192)
@@ -131,6 +138,81 @@ object Align {
     }
 
     /**
+     * Große Verschiebungen (Fotos aus der Hand, Sekunden auseinander: bei 50 MP schnell Hunderte
+     * Pixel): Suche auf 1/16 Auflösung bis ±maxShift, dann [align] um diese Schätzung herum.
+     */
+    fun alignLarge(refY: ByteArray, refS: IntArray, fy: ByteArray, w: Int, h: Int, maxShift: Int): FloatArray {
+        val k = 16
+        val dw = w / k
+        val dh = h / k
+        val a = downscaleN(refY, w, h, k)
+        val b = downscaleN(fy, w, h, k)
+        val R = max(2, maxShift / k)
+        var bx = 0
+        var by = 0
+        var best = Float.MAX_VALUE
+        for (dy in -R..R) for (dx in -R..R) {
+            // nur die Überlappung vergleichen, mittlerer Fehler (sonst gewinnt die kleinste Überlappung nicht unfair)
+            val x0 = max(0, -dx)
+            val x1 = min(dw, dw - dx)
+            val y0 = max(0, -dy)
+            val y1 = min(dh, dh - dy)
+            if ((x1 - x0) * (y1 - y0) < dw * dh / 3) continue
+            var s = 0L
+            for (y in y0 until y1) {
+                val ro = (y + dy) * dw + dx
+                val fo = y * dw
+                for (x in x0 until x1) s += abs(a[ro + x] - b[fo + x])
+            }
+            val m = s.toFloat() / ((x1 - x0) * (y1 - y0))
+            if (m < best) { best = m; bx = dx; by = dy }
+        }
+        return align(refY, refS, fy, w, h, bx * k, by * k)
+    }
+
+    /** Mittelwert über k×k-Blöcke. */
+    fun downscaleN(y: ByteArray, w: Int, h: Int, k: Int): IntArray {
+        val dw = w / k
+        val dh = h / k
+        val out = IntArray(dw * dh)
+        for (dy in 0 until dh) for (dx in 0 until dw) {
+            var s = 0
+            for (a in 0 until k) {
+                val row = (dy * k + a) * w + dx * k
+                for (c in 0 until k) s += y[row + c].toInt() and 255
+            }
+            out[dy * dw + dx] = s / (k * k)
+        }
+        return out
+    }
+
+    /**
+     * Restfehler nach dem Ausrichten (mittlere Helligkeitsabweichung 0..255) im inneren Bereich –
+     * zeigt, ob ein Bild wirklich passt (Doppelbilder entstehen, wenn nicht).
+     */
+    fun residual(ref: ByteArray, f: ByteArray, w: Int, h: Int, field: ShiftField): Float {
+        val d = FloatArray(2)
+        var s = 0.0
+        var n = 0
+        for (y in h / 8 until h - h / 8 step 3) for (x in w / 8 until w - w / 8 step 3) {
+            field.at(x.toFloat(), y.toFloat(), d)
+            val rx = x + d[0]
+            val ry = y + d[1]
+            if (rx < 0f || ry < 0f || rx >= w - 1 || ry >= h - 1) continue
+            val ix = rx.toInt()
+            val iy = ry.toInt()
+            val ax = rx - ix
+            val ay = ry - iy
+            val i = iy * w + ix
+            val r = ((ref[i].toInt() and 255) * (1 - ax) + (ref[i + 1].toInt() and 255) * ax) * (1 - ay) +
+                ((ref[i + w].toInt() and 255) * (1 - ax) + (ref[i + w + 1].toInt() and 255) * ax) * ay
+            s += abs(r - (f[y * w + x].toInt() and 255))
+            n++
+        }
+        return if (n == 0) 255f else (s / n).toFloat()
+    }
+
+    /**
      * Verschiebungsfeld: je Kachel eine eigene Verschiebung (Handdrehung, Verzerrung, leichte
      * Bewegung im Bild), zwischen den Kachelmitten weich (bilinear) übergeblendet.
      * Gleiche Bedeutung wie [align]: Bild(p) ≈ Referenz(p + d(p)).
@@ -159,7 +241,7 @@ object Align {
 
     /**
      * Kachelweises Ausrichten, ausgehend von der globalen Verschiebung (gx, gy): erst grob auf
-     * Viertel-Auflösung (fängt Handdrehung bis ≈ 1° ab), dann fein in voller Auflösung.
+     * Viertel-Auflösung (±20 px um die globale Schätzung), dann fein in voller Auflösung.
      * Kacheln ohne Struktur oder mit Ausreißern bekommen den Wert ihrer Nachbarn.
      */
     fun localField(ref: ByteArray, f: ByteArray, w: Int, h: Int, gx: Float, gy: Float, tile: Int = 96): ShiftField {
@@ -167,14 +249,14 @@ object Align {
         val ny = max(1, h / tile)
         val refI = IntArray(w * h) { ref[it].toInt() and 255 }
         val fI = IntArray(w * h) { f[it].toInt() and 255 }
-        // grob (Viertel-Auflösung, Suche ±3 = ±12 Pixel)
+        // grob (Viertel-Auflösung, Suche ±5 = ±20 Pixel – reicht für ≈ 1° Drehung bei großen Ausschnitten)
         val dw = w / 4
         val dh = h / 4
         val rs = downscale4(ref, w, h)
         val fs = downscale4(f, w, h)
         val cx = FloatArray(nx * ny) { gx / 4f }
         val cy = FloatArray(nx * ny) { gy / 4f }
-        val okC = tileSearch(rs, fs, dw, dh, nx, ny, cx, cy, 3, 1, 12f)
+        val okC = tileSearch(rs, fs, dw, dh, nx, ny, cx, cy, 5, 1, 12f)
         clean(nx, ny, cx, cy, okC, gx / 4f, gy / 4f, 0.5f)
         // fein (volle Auflösung, Suche ±3 um die Grobschätzung)
         val fx = FloatArray(nx * ny) { cx[it] * 4f }
@@ -196,11 +278,12 @@ object Align {
             val k = ty * nx + tx
             val cgx = Math.round(dx[k])
             val cgy = Math.round(dy[k])
-            val m = R + max(abs(cgx), abs(cgy)) + 2
-            val xa = max(tx * w / nx, m)
-            val xb = min((tx + 1) * w / nx, w - m)
-            val ya = max(ty * h / ny, m)
-            val yb = min((ty + 1) * h / ny, h - m)
+            // nur Stellen, an denen Bild und verschobene Referenz beide gültig sind
+            // (einseitig: bei großer Verschiebung bleibt die andere Bildseite nutzbar)
+            val xa = max(tx * w / nx, max(1, R - cgx))
+            val xb = min((tx + 1) * w / nx, min(w - 2, w - 2 - cgx - R))
+            val ya = max(ty * h / ny, max(1, R - cgy))
+            val yb = min((ty + 1) * h / ny, min(h - 2, h - 2 - cgy - R))
             if (xb - xa < 6 || yb - ya < 6) continue
             var tex = 0L
             var cnt = 0

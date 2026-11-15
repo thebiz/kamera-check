@@ -129,6 +129,12 @@ object SuperRes {
     /** Bilder, die weniger als diesen Anteil der Schärfe des besten Bildes haben, fliegen raus. */
     const val SHARP_KEEP = 0.8f
 
+    /** Restfehler (Helligkeitsstufen), bis zu dem ein ausgerichtetes Bild sicher passt */
+    const val RESID_ABS = 6f
+
+    /** Restfehler der Bilder beim letzten Durchlauf (für die Infozeile) */
+    @Volatile var lastResiduals = ""
+
     /** Anzahl beim letzten Durchlauf aussortierter (unscharfer/verrutschter) Bilder */
     @Volatile var dropped = 0
 
@@ -136,6 +142,8 @@ object SuperRes {
         frames: MutableList<Frame?>,
         r: Region,
         frameWeights: FloatArray? = null,
+        /** > 0: Fotos können weit gegeneinander verrutscht sein (Import), so weit wird gesucht */
+        maxShift: Int = 0,
         progress: (String) -> Unit,
     ): Result {
         val w = r.rw
@@ -155,14 +163,29 @@ object SuperRes {
             if (i == refIdx) continue
             n++
             progress("Richte aus … $n/${total - 1}")
-            val s = Align.align(ref.y, refSmall, frames[i]!!.y, w, h)
+            val s = if (maxShift > 0) Align.alignLarge(ref.y, refSmall, frames[i]!!.y, w, h, maxShift)
+                else Align.align(ref.y, refSmall, frames[i]!!.y, w, h)
             shifts.add(floatArrayOf(s[0], s[1], s[2], i.toFloat()))
         }
         val costs = shifts.map { it[2] }.sorted()
         val median = if (costs.isEmpty()) 0f else costs[costs.size / 2]
         // Nur Bilder, die fast so scharf sind wie das schärfste: ein unscharfes Bild im Mittel
         // macht das Ergebnis weicher statt besser (Befund Diagnosebild 1.3)
-        val good = shifts.filter { it[2] <= median * 1.6f + 1f && sharp[it[3].toInt()] >= SHARP_KEEP * sharp[refIdx] }
+        val good0 = shifts.filter { it[2] <= median * 1.6f + 1f && sharp[it[3].toInt()] >= SHARP_KEEP * sharp[refIdx] }
+        // kachelweise ausrichten (Handdrehung) und prüfen, ob das Bild danach wirklich passt –
+        // sonst entstehen Doppelbilder (Befund Import 1.5)
+        val fields = HashMap<Int, Align.ShiftField>()
+        val resid = HashMap<Int, Float>()
+        for ((k, sft) in good0.withIndex()) {
+            progress("Prüfe Passgenauigkeit ${k + 1}/${good0.size} …")
+            val idx = sft[3].toInt()
+            val fld = Align.localField(ref.y, frames[idx]!!.y, w, h, sft[0], sft[1])
+            fields[idx] = fld
+            resid[idx] = Align.residual(ref.y, frames[idx]!!.y, w, h, fld)
+        }
+        val minRes = resid.values.minOrNull() ?: 0f
+        val good = good0.filter { resid[it[3].toInt()]!! <= max(RESID_ABS, minRes * 1.5f + 1f) }
+        lastResiduals = good0.joinToString(" ") { "%.1f".format(resid[it[3].toInt()]) }
         dropped = total - 1 - good.size
 
         val u = 1
@@ -185,8 +208,8 @@ object SuperRes {
             progress("Verrechne ${k + 2}/${good.size + 1} …")
             val idx = s[3].toInt()
             val f = frames[idx]!!
-            // kachelweise ausrichten (Handdrehung), Gewicht nach Schärfe
-            val field = Align.localField(ref.y, f.y, w, h, s[0], s[1])
+            // Gewicht nach Schärfe
+            val field = fields[idx]!!
             val q = sharp[idx] / sharp[refIdx]
             val fw = (frameWeights?.getOrNull(idx) ?: 1f) * q * q * q * q
             splat(f.y, field, fw, ref.y, r, u, acc, wt, wo, ho)

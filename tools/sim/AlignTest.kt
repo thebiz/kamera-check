@@ -3,11 +3,11 @@ import kotlin.math.*
 import java.util.Random
 
 fun main() {
-    val w = 946; val h = 742
+    val w = 1600; val h = 1300
     val rnd = Random(3)
     // Motiv: viele kleine "Buchstaben"-Striche auf hellem Grund, leicht weich
     val base = FloatArray(w * h) { 230f }
-    repeat(2500) {
+    repeat(9000) {
         val x0 = rnd.nextInt(w); val y0 = rnd.nextInt(h)
         val len = 4 + rnd.nextInt(14); val ang = rnd.nextDouble() * PI
         for (t in 0 until len) {
@@ -36,20 +36,28 @@ fun main() {
     }
     val (ref, _) = frame(0.0, 0f, 0f, 1.0)
     val refS = Align.downscale4(ref, w, h)
+    // falsch ausgerichtetes Bild (Doppelbild-Gefahr): Feld absichtlich 8 px daneben
+    run {
+        val (f, _) = frame(0.0, 3f, 0f, 1.0)
+        println("Kontrolle: absichtlich 8 px daneben → Restfehler %.1f".format(Align.residual(ref, f, w, h, Align.ShiftField.constant(w, h, 11f, 0f))))
+    }
     for ((name, p) in listOf("nur Verschiebung" to doubleArrayOf(0.0, 3.4, -2.7, 1.0),
             "Drehung 0,4°" to doubleArrayOf(0.4, 3.4, -2.7, 1.0),
-            "Drehung 0,8° + Zoom 0,3 %" to doubleArrayOf(0.8, -5.2, 4.1, 1.003))) {
+            "Drehung 0,8° + Zoom 0,3 %" to doubleArrayOf(0.8, -5.2, 4.1, 1.003),
+            "Foto aus der Hand: 230/−170 px + 0,5°" to doubleArrayOf(0.5, 230.0, -170.0, 1.0),
+            "Foto aus der Hand: −380/290 px + 0,9°" to doubleArrayOf(0.9, -380.0, 290.0, 1.002))) {
         val (f, T) = frame(p[0], p[1].toFloat(), p[2].toFloat(), p[3])
-        val g = Align.align(ref, refS, f, w, h)
+        val g = Align.alignLarge(ref, refS, f, w, h, 500)
         val fld = Align.localField(ref, f, w, h, g[0], g[1])
         var eg = 0.0; var el = 0.0; var n = 0
         val o = FloatArray(2)
         for (y in 40 until h - 40 step 20) for (x in 40 until w - 40 step 20) {
             val t = T(x.toFloat(), y.toFloat()); val tdx = t[0] - x; val tdy = t[1] - y
+            if (t[0] < 20 || t[1] < 20 || t[0] > w - 20 || t[1] > h - 20) continue // ohne Überlappung keine Daten
             eg += (g[0] - tdx).pow(2) + (g[1] - tdy).pow(2)
             fld.at(x.toFloat(), y.toFloat(), o)
             el += (o[0] - tdx).pow(2) + (o[1] - tdy).pow(2); n++
         }
-        println("%-28s Fehler global %.2f px · kachelweise %.2f px".format(name, sqrt(eg / n), sqrt(el / n)))
+        println("%-40s Fehler global %.2f px · kachelweise %.2f px · Restfehler %.1f".format(name, sqrt(eg / n), sqrt(el / n), Align.residual(ref, f, w, h, fld)))
     }
 }

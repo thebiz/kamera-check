@@ -86,7 +86,7 @@ class ImportActivity : Activity() {
             onChange = { v -> setZoom(2f * (10f / 2f).pow(v)) }
         }, LinearLayout.LayoutParams(-1, -2))
         panel.addView(TextView(this).apply {
-            text = "Rahmen antippen oder ziehen: Ausschnitt verschieben"
+            text = "Irgendwo auf dem Bild ziehen: Rahmen verschiebt sich mit, ohne unter dem Finger zu liegen"
             setTextColor(MUTED)
             textSize = 12f
             gravity = Gravity.CENTER
@@ -217,12 +217,29 @@ class ImportActivity : Activity() {
             c.drawRect(f, frame)
         }
 
+        private var downX = 0f
+        private var downY = 0f
+        private var startCx = 0f
+        private var startCy = 0f
+
+        /**
+         * Ziehen verschiebt den Rahmen relativ (wie ein Touchpad) – der Finger muss nicht auf dem Rahmen
+         * liegen und verdeckt so nicht die Stelle, die man sucht (Johns Hinweis).
+         */
         override fun onTouchEvent(e: MotionEvent): Boolean {
             val r = imgRect() ?: return true
-            if (e.action == MotionEvent.ACTION_DOWN || e.action == MotionEvent.ACTION_MOVE) {
-                cx = ((e.x - r.left) / r.width()).coerceIn(0f, 1f)
-                cy = ((e.y - r.top) / r.height()).coerceIn(0f, 1f)
-                invalidate()
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    val hw = 0.5f / zoom
+                    cx = cx.coerceIn(hw, 1 - hw)
+                    cy = cy.coerceIn(hw, 1 - hw)
+                    downX = e.x; downY = e.y; startCx = cx; startCy = cy
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    cx = (startCx + (e.x - downX) / r.width()).coerceIn(0f, 1f)
+                    cy = (startCy + (e.y - downY) / r.height()).coerceIn(0f, 1f)
+                    invalidate()
+                }
             }
             return true
         }

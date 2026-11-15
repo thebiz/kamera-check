@@ -2297,7 +2297,8 @@ class MainActivity : Activity() {
             val info = ArrayList<String>()
             showStatus("Lese Fotos …")
             val dims = PhotoIo.info(this, uris[0]) ?: throw IllegalStateException("Foto lässt sich nicht öffnen")
-            val margin = 96
+            // großer Rand: zwischen Fotos aus der Hand liegen bei 50 MP schnell Hunderte Pixel
+            val margin = IMPORT_MAX_SHIFT
             val frames = ArrayList<Frame?>()
             var region: Region? = null
             var cropW = 0
@@ -2329,15 +2330,16 @@ class MainActivity : Activity() {
             if (mpx < 30) info += "Achtung: Foto hat nur ${"%.0f".format(mpx)} MP – in der Kamera-App auf 50 MP stellen"
 
             // 1. übereinanderlegen (kachelweise ausgerichtet, unscharfe aussortiert)
-            val res = SuperRes.process(frames, r, null) { showStatus(it) }
+            val res = SuperRes.process(frames, r, null, IMPORT_MAX_SHIFT) { showStatus(it) }
             info += if (res.total > 1) "${res.used} von ${res.total} Fotos verrechnet" +
-                (if (SuperRes.dropped > 0) " (${SuperRes.dropped} unscharf/verrutscht aussortiert)" else "")
+                (if (SuperRes.dropped > 0) " (${SuperRes.dropped} unscharf oder nicht deckungsgleich aussortiert)" else "") +
+                " · Restfehler je Foto ${SuperRes.lastResiduals} (passt bis ${SuperRes.RESID_ABS.toInt()})"
             else "Einzelfoto (mit mehreren Fotos wird es ruhiger und schärfer)"
 
-            // Diagnose: Ausschnitt 1:1 in der Bildmitte
+            // Diagnose: kleiner Ausschnitt in der Bildmitte, 1,8-fach vergrößert, damit Details sichtbar werden
             val diag = ArrayList<Pair<String, Bitmap>>()
-            val fx = min(1f, DIAG_TILE.toFloat() / res.single.width)
-            val fy = min(1f, DIAG_TILE.toFloat() / res.single.height)
+            val fx = min(1f, DIAG_IMPORT_PX.toFloat() / res.single.width)
+            val fy = min(1f, DIAG_IMPORT_PX.toFloat() / res.single.height)
             val dr = floatArrayOf(0.5f - fx / 2, 0.5f - fy / 2, 0.5f + fx / 2, 0.5f + fy / 2)
             fun keep(name: String, b: Bitmap) {
                 if (diagOn) try { diag += name to diagCrop(b, dr, 0) } catch (_: Throwable) {}
@@ -2532,6 +2534,10 @@ class MainActivity : Activity() {
 
     companion object {
         private const val DIAG_TILE = 540
+        /** Import: so viele Pixel des Ausschnitts zeigt eine Diagnose-Kachel (vergrößert auf DIAG_TILE) */
+        private const val DIAG_IMPORT_PX = 300
+        /** Import: so weit (Pixel) dürfen Fotos gegeneinander verrutscht sein */
+        private const val IMPORT_MAX_SHIFT = 400
         const val ACTION_IMPORT = "de.john.kameracheck.IMPORT"
         const val EXTRA_URIS = "uris"
         const val EXTRA_RECT = "rect"

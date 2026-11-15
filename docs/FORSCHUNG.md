@@ -22,7 +22,7 @@ herausholen, statt es nur hübsch zu erfinden.
 
 ---
 
-## 2. Die Rechenkette (Version 1.5)
+## 2. Die Rechenkette (Version 1.6)
 
 Ein Druck auf den Auslöser löst diese Schritte aus:
 
@@ -271,6 +271,31 @@ Unschärfe σ = 1,2 px, Anteil des zurückgeholten Kontrasts):
 
 Beide Strich-Arten werden jetzt gleich stark zurückgeholt, der Saum ist halbiert.
 
+**Erster 50-MP-Import (15.11.2026, nachts, Raumlicht):** ![Import 1.5](diagnose_import_v1-5.jpg)
+
+- Der 50-MP-Modus der Xiaomi-Kamera speichert **nur im Format 3:4** wirklich 50 MP
+  (6144 × 8192). Im langen Vollbildformat kamen nur 7 MP (1836 × 4080) – trotz „50M“.
+- **Ernüchternd:** Kachel 1 (50 MP) und Kachel 2 (auf 12 MP verkleinert) sehen fast gleich
+  aus. Bei diesem Licht bringt Xiaomis 50-MP-Modus kaum echte Zusatzdetails – vermutlich
+  rechnet die Kamera die Pixel bei wenig Licht stark glatt. Muss bei Tageslicht wiederholt werden.
+- **Doppelbilder** beim Übereinanderlegen der 5 Fotos: Zwischen Fotos aus der Hand liegen
+  bei 50 MP Hunderte Pixel; die Suche reichte nur ±40 px.
+
+**Version 1.6:** Suche bis ±400 px (erst auf 1/16 Auflösung, dann fein), kachelweise Suche
+±20 px und einseitige Ränder (bei großer Verschiebung bleibt die andere Bildseite nutzbar),
+und eine **Passprobe**: Nach dem Ausrichten wird der Restfehler jedes Fotos gemessen; Fotos,
+die nicht deckungsgleich sind, fliegen raus, statt Doppelbilder zu erzeugen.
+Simulation (`tools/sim/AlignTest.kt`, Fotos aus der Hand):
+
+| Bewegung | Ausrichtfehler | Restfehler (passt bis 6) |
+|---|---|---|
+| 230/−170 px + 0,5° Drehung | 0,21 px | 4,6 |
+| −380/290 px + 0,9° Drehung | 0,31 px | 5,7 |
+| Kontrolle: 8 px daneben | – | 36,5 → wird aussortiert |
+
+Außerdem: Ausschnitt-Rahmen wird relativ gezogen (Finger verdeckt nichts, Johns Hinweis),
+Diagnose-Kacheln beim Import zeigen 300 Pixel vergrößert, damit Unterschiede sichtbar sind.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -285,6 +310,7 @@ Beide Strich-Arten werden jetzt gleich stark zurückgeholt, der Saum ist halbier
 | **Simulation ersetzt nicht das echte Foto** – Grafiker-Augen finden, was Zahlen übersehen | daraus: Version 1.0 setzt auf Physik statt Raten |
 | Bei ebenem Motiv muss alles gleich scharf sein; Ungleichmäßigkeit = Rechenfehler | Johns Hinweis; jetzt automatische Prüfung |
 | Die eigene Messmethode hatte einen festen Fehler (+0,5 px²) – sichtbar erst mit bekannten Testkanten | Kalibrier-Simulation, Version 1.1 |
+| Mehr Megapixel auf dem Datenblatt sind nicht automatisch mehr Detail – der Vergleich „50 MP gegen auf 12 MP verkleinert“ gehört in jede Messung | Import-Diagnose 1.5 |
 | Mitteln hilft nur, wenn die Bilder auf Bruchteile eines Pixels übereinanderliegen – sonst wird es weicher als ein Einzelbild | Diagnosebild 1.3 (Kachel 3 weicher als Kachel 2) |
 | Das Rohmaterial entscheidet: Eine gute Rechenkette auf zusammengefassten 12-MP-Pixeln verliert gegen die einfache Vorschau aus der hochauflösenden Bildmitte | Diagnosebild, Version 1.2.1 |
 | Die Handy-Vorschau ist ein starker Gegner: Bildprozessor schärft und mittelt bereits – unsere Kette muss sich daran messen, Schritt für Schritt | Johns Screenshot-Vergleich, Version 1.2 |
@@ -320,6 +346,7 @@ Beide Strich-Arten werden jetzt gleich stark zurückgeholt, der Saum ist halbier
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.6 | Import: Ausrichten bis ±400 px, Passprobe gegen Doppelbilder, Rahmen relativ ziehen |
 | 1.5 | 50-MP-Fotos der Xiaomi-Kamera importieren (automatisch, Teilen, Auswahl) mit Diagnosebild; 50-MP-Test; Entschärfen gebremst |
 | 1.4 | Kachelweises Ausrichten der Bildserie (zweistufig), unscharfe Bilder aussortiert, KI bei Schrift aus |
 | 1.3 | Quelle Kamera-Zoom: Bildprozessor zoomt bis 2× (hochauflösende Bildmitte), Rest rechnet die App; umschaltbar |
