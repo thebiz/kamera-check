@@ -18,7 +18,31 @@ import kotlin.math.sqrt
 
 class CheckActivity : Activity() {
 
+    @Deprecated("Activity-Result-API")
+    override fun onActivityResult(code: Int, result: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(code, result, data)
+        val uri = data?.data ?: data?.clipData?.getItemAt(0)?.uri
+        if (code != 11 || result != RESULT_OK || uri == null) return
+        detailOut.text = "Prüfe … (dauert einige Sekunden)"
+        Thread {
+            try {
+                val r = DetailCheck.run(this, uri)
+                val name = "detailtest_${System.currentTimeMillis() % 100000}"
+                ViewerActivity.saveToGallery(this, r.sheet, name)
+                runOnUiThread {
+                    detailOut.text = r.text + "\n\nVergleichsbild gespeichert als $name (Galerie)"
+                    detailImg.setImageBitmap(r.sheet)
+                }
+            } catch (e: Throwable) {
+                runOnUiThread { detailOut.text = "Fehler: ${e.message}" }
+            }
+        }.start()
+    }
+
     private val testLog = StringBuilder()
+    private lateinit var detailOut: TextView
+    private lateinit var detailImg: android.widget.ImageView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,6 +125,28 @@ class CheckActivity : Activity() {
             }
         })
         root.addView(testOut)
+
+        // Echte 50 MP oder hochgerechnet? Prüft ein Foto in Originalauflösung
+        root.addView(Button(this).apply {
+            text = "Foto prüfen: echte 50 MP?"
+            isAllCaps = false
+            setOnClickListener {
+                val pick = Intent(android.provider.MediaStore.ACTION_PICK_IMAGES)
+                val i = if (pick.resolveActivity(packageManager) != null) pick else Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*" }
+                @Suppress("DEPRECATION")
+                startActivityForResult(i, 11)
+            }
+        })
+        detailOut = TextView(this).apply {
+            textSize = 12.5f
+            setTextColor(0xFF5BE38A.toInt())
+            typeface = Typeface.MONOSPACE
+            setTextIsSelectable(true)
+            setPadding(0, (8 * dp).toInt(), 0, 0)
+        }
+        root.addView(detailOut)
+        detailImg = android.widget.ImageView(this).apply { adjustViewBounds = true }
+        root.addView(detailImg)
 
         root.addView(TextView(this).apply {
             text = report

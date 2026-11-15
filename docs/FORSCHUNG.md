@@ -385,6 +385,28 @@ Eigenschaften über ihren Namen mit geratenem Datentyp gelesen, Protokoll Zeile 
 eine Datei, Absturzursache wird mitgeschrieben, und der Versuch, bei dem es abstürzte, wird
 beim nächsten Start übersprungen – so kommt der Test Schritt für Schritt durch.
 
+**Ergebnis 1.8.3 (15.11.2026, mittags):** Nach einigen automatisch übersprungenen Abstürzen lief
+der Test durch. Die versteckte Liste `com.xiaomi.scaler.availableSuperResolutionStreamConfigurations`
+enthält **8192 × 6144** in den Formaten YUV (35), JPEG (33), privat (34) und RAW (32);
+`binningFactor` = 4, `qcfa.supported` = 1. Ergebnis der Aufnahmen:
+
+| Versuch (Kamera 0) | Ergebnis |
+|---|---|
+| Remosaic-Schalter einzeln, 12 MP | angenommen (int[] bzw. byte[]), Bild 12,6 MP |
+| **JPEG 8192 × 6144 + alle Remosaic-Schalter** | **✓ 50,3 MP – erstes 50-MP-Bild aus der eigenen App** |
+| YUV 8192 × 6144 | nur 1920 × 1440 (Ersatzbild) |
+| RAW 8192 × 6144 | Sitzung abgelehnt |
+| Hersteller-Sitzungsarten 0x8001–0x9001 | nur 1920 × 1440 |
+
+Damit kommt die App ohne Umweg über die Xiaomi-Kamera an 50 MP – allerdings als JPEG,
+also vom Bildprozessor bearbeitet. Johns Einwand: Ein „50-MP-RAW“ gibt es bei diesem Sensor
+im eigentlichen Sinn gar nicht (die Vierergruppen müssen erst umgerechnet werden). Ob das
+50-MP-JPEG echtes Mehr-Detail enthält, misst Version 1.9 („Foto prüfen“): Feinstruktur-Energie
+jenseits des 12-MP-Rasters, getrennt nach Kanten und glatten Flächen, im Vergleich zu einem
+wirklich hochgerechneten Bild (Simulation: hochgerechnet ≈ 1,7, echte 50 MP ≈ 5,5,
+unscharfe 50 MP ≈ 2,2), plus Vergleichsbild der drei strukturreichsten Stellen.
+Über den Chat verschickte Bilder werden verkleinert – deshalb läuft die Prüfung in der App.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -436,6 +458,7 @@ beim nächsten Start übersprungen – so kommt der Test Schritt für Schritt du
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.9 | Erste 50-MP-Aufnahme in der eigenen App (versteckte Xiaomi-Größe + Remosaic); „Foto prüfen: echte 50 MP?“ |
 | 1.8.3 | 50-MP-Test absturzfest (Protokoll in Datei, abgestürzte Versuche werden übersprungen), Remosaic-Schalter einzeln |
 | 1.8.2 | 50-MP-Test Stufe 2: Remosaic- und Super-Resolution-Schalter von Xiaomi/MediaTek |
 | 1.8.1 | Testversionen mit anderen Paketnamen für den 50-MP-Test |
