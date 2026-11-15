@@ -262,7 +262,7 @@ class ViewerActivity : Activity() {
         const val KI = "letztes_ki.jpg"
         const val DEFAULT_MIX = 30
         /** Klarheit beim ersten Öffnen: sanft (danach merkt sich der Viewer Johns Einstellung) */
-        const val DEFAULT_CLARITY = 0.3f
+        const val DEFAULT_CLARITY = 0.2f
         /** KI-Anteil, mit dem die Ansicht startet (0, wenn Schrift erkannt wurde – dort erfindet die KI) */
         @Volatile var startMix = DEFAULT_MIX
         const val INFO = "letztes_info.txt"

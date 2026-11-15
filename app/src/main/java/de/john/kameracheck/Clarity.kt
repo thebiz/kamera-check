@@ -7,10 +7,10 @@ import kotlin.math.min
 /**
  * „Klarheit“ wie in Galerie-Apps (Johns Test 15.11.: hat das Ergebnis sichtbar verbessert) – selbst gebaut:
  *
- * Grundbild = kantenschonend stark weichgezeichnet (Guided Filter, He et al. 2010, schnelle Fassung auf
- * Viertel-Auflösung). Detail = Bild − Grundbild. Ausgabe = Bild + Stärke · Detail, vor allem in den Mitteltönen.
- * Der Guided Filter folgt kräftigen Kanten (dort ist Detail ≈ 0 → keine hellen Säume) und glättet nur
- * mittelstarke Struktur – genau die wird angehoben. Nur Helligkeit, Farben bleiben.
+ * Grundbild = großflächig weichgezeichnet. Detail = Bild − Grundbild, weich gedeckelt (große Abweichungen an
+ * Kanten zählen kaum, aufhellen noch weniger als abdunkeln). Ausgabe = Bild + Stärke · Detail, vor allem in den
+ * Mitteltönen. Nur Helligkeit, Farben bleiben.
+ * (1.16 nutzte einen Guided Filter: der ließ um Kanten einen glatten, hellen Streifen ohne Struktur – Johns Screenshot.)
  */
 class Clarity(src: Bitmap) {
     val w = src.width
@@ -48,15 +48,13 @@ class Clarity(src: Bitmap) {
     companion object {
         /** Verstärkung des Details bei voller Stärke */
         const val MAX_GAIN = 1.5f
-        /** Ab dieser Helligkeitsschwankung (Varianz, 0..1) gilt Struktur als kräftige Kante und bleibt unberührt */
-        private const val EPS = 0.01f
         private const val SUB = 4
 
         fun detailLayer(l: FloatArray, w: Int, h: Int): FloatArray {
-            // Radius: großflächig wie in Galerie-Apps, an die Bildgröße angepasst
+            // Grundbild: großflächig weichgezeichnet (dreimal Kastenfilter ≈ Gauß) auf Viertel-Auflösung
             val sw = max(1, w / SUB)
             val sh = max(1, h / SUB)
-            val r = max(2, min(sw, sh) / 60)
+            val r = max(2, min(sw, sh) / 120)
             val s = FloatArray(sw * sh)
             for (y in 0 until sh) for (x in 0 until sw) {
                 var acc = 0f
@@ -66,18 +64,7 @@ class Clarity(src: Bitmap) {
                 }
                 s[y * sw + x] = acc / max(1, n)
             }
-            val mI = box(s, sw, sh, r)
-            val mII = box(FloatArray(s.size) { s[it] * s[it] }, sw, sh, r)
-            val a = FloatArray(s.size)
-            val b = FloatArray(s.size)
-            for (i in s.indices) {
-                val v = max(0f, mII[i] - mI[i] * mI[i])
-                a[i] = v / (v + EPS)
-                b[i] = mI[i] - a[i] * mI[i]
-            }
-            val ma = box(a, sw, sh, r)
-            val mb = box(b, sw, sh, r)
-            // hochrechnen (bilinear) und Grundbild = A·I + B
+            val base = box(box(box(s, sw, sh, r), sw, sh, r), sw, sh, r)
             val d = FloatArray(w * h)
             for (y in 0 until h) {
                 val fy = ((y + 0.5f) / SUB - 0.5f).coerceIn(0f, sh - 1f)
@@ -89,15 +76,26 @@ class Clarity(src: Bitmap) {
                     val x0 = fx.toInt()
                     val x1 = min(sw - 1, x0 + 1)
                     val ax = fx - x0
-                    val i00 = y0 * sw + x0; val i10 = y0 * sw + x1; val i01 = y1 * sw + x0; val i11 = y1 * sw + x1
-                    val aa = (ma[i00] * (1 - ax) + ma[i10] * ax) * (1 - ay) + (ma[i01] * (1 - ax) + ma[i11] * ax) * ay
-                    val bb = (mb[i00] * (1 - ax) + mb[i10] * ax) * (1 - ay) + (mb[i01] * (1 - ax) + mb[i11] * ax) * ay
+                    val bb = (base[y0 * sw + x0] * (1 - ax) + base[y0 * sw + x1] * ax) * (1 - ay) +
+                        (base[y1 * sw + x0] * (1 - ax) + base[y1 * sw + x1] * ax) * ay
                     val k = y * w + x
-                    d[k] = l[k] - (aa * l[k] + bb)
+                    d[k] = soft(l[k] - bb)
                 }
             }
             return d
         }
+
+        /**
+         * Kantenschutz (1.16.1, nach Johns Screenshot): Feine Struktur (kleine Abweichung) wird voll verstärkt –
+         * gleichmäßig bis direkt an die Kante, kein glatter Streifen mehr. Große Abweichungen (= kräftige Kanten)
+         * werden weich gedeckelt, nach oben (aufhellen) stärker als nach unten: keine hellen Säume.
+         */
+        private fun soft(v: Float): Float =
+            if (v >= 0f) T_UP * kotlin.math.tanh(v / T_UP) else T_DOWN * kotlin.math.tanh(v / T_DOWN)
+
+        /** Deckel in Helligkeit 0..1: aufhellen höchstens ≈ 6, abdunkeln ≈ 13 von 255 (vor der Verstärkung) */
+        private const val T_UP = 0.024f
+        private const val T_DOWN = 0.05f
 
         /** Mittelwert im Quadrat (2r+1)², getrennt in x und y, am Rand verkürzt. */
         private fun box(src: FloatArray, w: Int, h: Int, r: Int): FloatArray {

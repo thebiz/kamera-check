@@ -577,6 +577,16 @@ Im Viewer als eigener Regler „Klarheit“ (Start 30 %, merkt sich Johns Einste
 rechte Seite; links bleibt das Normalbild als Maßstab. „Mischung speichern“ speichert mit Klarheit.
 Hinweis zur Ehrlichkeit: Klarheit erzeugt keine neuen Details, sie macht vorhandene sichtbarer.
 
+**Klarheit verbessert (Version 1.16.1):** Johns Test: 30 % zu kräftig, 18 % gut; an Kanten (Schriftzug
+„DREAME“, Rand des Aufklebers) ein schmaler, glatter, etwas hellerer Streifen ohne Kartonstruktur.
+Ursache: Der Guided Filter erkennt in einem ganzen Umkreis (≈ 40 px) um jede kräftige Kante „Kante“
+und schaltet dort die Verstärkung ab – daneben wird die Struktur betont, der Streifen fällt auf.
+Neu: Grundbild einfach großflächig weichgezeichnet; die Abweichung davon wird **weich gedeckelt**
+(tanh): feine Struktur voll verstärkt, gleichmäßig bis an die Kante; große Abweichungen (Kanten)
+zählen kaum, und aufhellen ist enger gedeckelt (≈ 6 Stufen) als abdunkeln (≈ 13) – keine hellen Säume.
+Am Screenshot nachgerechnet: Struktur reicht jetzt bis an die Buchstaben, kein heller Rand.
+Startwert 20 % (Johns Wert bleibt gespeichert).
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -629,6 +639,7 @@ Hinweis zur Ehrlichkeit: Klarheit erzeugt keine neuen Details, sie macht vorhand
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.16.1 | Klarheit ohne glatten hellen Streifen an Kanten (weich gedeckelt, aufhellen enger), Start 20 % |
 | 1.16 | Regler „Klarheit“ im Viewer (kantenschonend, Mitteltöne), nach Johns Galerie-Test |
 | 1.15.1 | Knopf „In Galerie öffnen“ im Viewer, Vorschaubild lange drücken öffnet das Foto in der Galerie |
 | 1.15 | Fortschritt am Fokusrahmen, Vergleich standardmäßig aus; Bilanz: Grenze ist die Unschärfe der Kamera |
