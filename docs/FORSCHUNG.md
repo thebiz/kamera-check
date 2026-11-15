@@ -454,6 +454,23 @@ Ursache vermutlich: Verwacklung bei 1,5 m Abstand aus der Hand und Xiaomis Bildb
 gegenüber der Ausschnittsmitte); die *Stärke* misst die App in jedem Foto selbst. Profil löschbar.
 Lehre: **absolute Kalibrierwerte nie ungeprüft übernehmen – gegen die Messung im Bild absichern.**
 
+**Befund 15.11.2026, nachmittags:** Mit dem 50-MP-Profil nur als Verlauf sind die Ränder weg. Und:
+**Der eigene Weg (12-MP-Serie aus der App, Kamera-Zoom 2×, 16 Bilder gemittelt, DPIR) schlägt das
+50-MP-Foto der Xiaomi-Kamera deutlich** – im 50-MP-Foto war die Schrift unlesbar, im eigenen
+Ergebnis lesbar (Johns Vergleich). Erklärung: Bei 50 MP bekommt jedes Pixel nur ein Viertel Licht,
+die Kamera bügelt das Rauschen weg und mit ihm die Feinheiten. Viele ehrliche Bilder schlagen ein
+geschöntes Riesenbild.
+
+**Nächster Hebel – RAW-Super-Resolution (Version 1.12):** Das Handzittern verschiebt jedes Bild
+um Bruchteile eines Pixels; die Rohpixel (je eine Farbe) werden an ihrer exakten Position in ein
+doppelt so feines Raster eingetragen, ohne Farben zu erraten (Prinzip wie Googles „Handheld
+Super-Resolution“). Die App kann das seit Version 0.5, hatte es aber zugunsten des Kamera-Zooms
+abgeschaltet. Jetzt läuft es als **Vergleich A/B in einer Aufnahme**: Ein Druck auf den Auslöser
+nimmt erst Serie A (bisheriger Weg) und direkt danach Serie B (RAW, 8–30 Bilder) auf. Beide bekommen
+„Schärfe zurückholen“ (Physik + DPIR; B mit dem RAW-Kalibrierprofil). Der Viewer zeigt links A,
+rechts per Regler bzw. „Echt ⇄ KI“ A oder B; ein gemeinsames Diagnosebild „vergleich_…“ zeigt die
+entscheidenden Kacheln. Johns Vorgabe: Jede Neuerung muss sich gegen den guten Weg beweisen.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -469,6 +486,7 @@ Lehre: **absolute Kalibrierwerte nie ungeprüft übernehmen – gegen die Messun
 | Bei ebenem Motiv muss alles gleich scharf sein; Ungleichmäßigkeit = Rechenfehler | Johns Hinweis; jetzt automatische Prüfung |
 | Die eigene Messmethode hatte einen festen Fehler (+0,5 px²) – sichtbar erst mit bekannten Testkanten | Kalibrier-Simulation, Version 1.1 |
 | Eine KI, der man die gemessene Unschärfe mitgibt, schlägt sowohl reine Physik als auch eine ratende KI – Messung und Kalibrierung werden so erst richtig wertvoll | PC-Simulation, Version 1.7 (+2,6 dB gegenüber Richardson-Lucy) |
+| Eine Serie ehrlicher 12-MP-Bilder mit eigener Rechnung schlägt das geschönte 50-MP-Einzelbild des Herstellers | Johns Vergleich am Karton, 15.11.2026 |
 | Mehr Megapixel auf dem Datenblatt sind nicht automatisch mehr Detail – der Vergleich „50 MP gegen auf 12 MP verkleinert“ gehört in jede Messung | Import-Diagnose 1.5 |
 | Mitteln hilft nur, wenn die Bilder auf Bruchteile eines Pixels übereinanderliegen – sonst wird es weicher als ein Einzelbild | Diagnosebild 1.3 (Kachel 3 weicher als Kachel 2) |
 | Das Rohmaterial entscheidet: Eine gute Rechenkette auf zusammengefassten 12-MP-Pixeln verliert gegen die einfache Vorschau aus der hochauflösenden Bildmitte | Diagnosebild, Version 1.2.1 |
@@ -505,6 +523,7 @@ Lehre: **absolute Kalibrierwerte nie ungeprüft übernehmen – gegen die Messun
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.12 | Vergleich A/B: bisheriger Weg gegen RAW-Super-Resolution in einer Aufnahme |
 | 1.11.1 | 50-MP-Profil nur noch als Verlauf (Stärke aus dem Foto), Profil löschbar |
 | 1.11 | Kalibrieren für 50 MP, Farben vom Original, Physik-Schärfe an kräftigen Kanten, Echt ⇄ KI |
 | 1.10 | „Entschärfen“ heißt jetzt „Schärfe zurückholen“ (Johns Wunsch); 50-MP-Hinweis mit Pro-Modus und Format 3:4 |
