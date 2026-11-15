@@ -174,6 +174,19 @@ Version 1.1 hatte schon „4° schräg“ und „überbelichtet“ nicht mehr er
 was in der Hand passiert. Lehre: **Testfälle müssen aus der echten Handhabung kommen**,
 nicht aus dem Idealfall.
 
+**Zweiter Praxistest (15.11.2026, nachts):** Kalibrierung lief durch, deutlich schneller.
+Die Graustufen wurden erst erkannt, als John die iPad-Helligkeit stark reduziert hatte –
+das Weiß des Displays war trotz −1 Blende ausgebrannt. Nach dem Speichern blieben alle
+Knöpfe verschwunden (Fehler: Ansicht wurde aus dem Rechen-Thread geändert) – behoben in 1.2.1.
+
+**Wichtigster Befund bisher:** Beim Glas „500 g“ sah die **Live-Vorschau besser aus als das
+berechnete Foto** (Johns Vergleich per Screenshot). Im Foto: verlaufene Gesichter auf der
+Flasche, wellig verzogene Kleinschrift, helle Säume um „500 g“. Vermutete Ursachen:
+kachelweises Ausrichten (Wellen) und zu starkes Entschärfen (Säume). Statt weiter zu raten,
+erzeugt Version 1.2.1 nach jedem Foto ein **Diagnosebild**: derselbe Ausschnitt nach jedem
+Rechenschritt nebeneinander (Vorschau · Einzelbild · YUV-Mittel · RAW-Mehrbild · entschärft ·
+KI · Galerie) – so wird sichtbar, welcher Schritt das Bild verschlechtert.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -188,6 +201,7 @@ nicht aus dem Idealfall.
 | **Simulation ersetzt nicht das echte Foto** – Grafiker-Augen finden, was Zahlen übersehen | daraus: Version 1.0 setzt auf Physik statt Raten |
 | Bei ebenem Motiv muss alles gleich scharf sein; Ungleichmäßigkeit = Rechenfehler | Johns Hinweis; jetzt automatische Prüfung |
 | Die eigene Messmethode hatte einen festen Fehler (+0,5 px²) – sichtbar erst mit bekannten Testkanten | Kalibrier-Simulation, Version 1.1 |
+| Die Handy-Vorschau ist ein starker Gegner: Bildprozessor schärft und mittelt bereits – unsere Kette muss sich daran messen, Schritt für Schritt | Johns Screenshot-Vergleich, Version 1.2 |
 | Eine Erkennung, die nur den Idealfall kennt, scheitert in der Hand (Schräglage, Ausbrennen) | Johns 4 Fehlversuche mit den Graustufen; Version 1.2 |
 
 ---
@@ -220,5 +234,6 @@ nicht aus dem Idealfall.
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.2.1 | Diagnosebild aller Rechenschritte; Kalibrierung ansehen; Fehler „Knöpfe weg“ nach dem Kalibrieren behoben |
 | 1.2 | Kalibrierung überarbeitet: Anweisungen unten, robuste Graustufen-Erkennung (schräg, Perspektive, ausgebrannt), überspringbar, schneller (nur Rahmen, 12 Bilder), Belichtung −1 Blende |
 | 1.1 | Kalibrierung mit Testmuster auf dem iPad: Schärfeprofil je Bildbereich, Farbe und Richtung; Graustufen-Prüfung (Linearität, Streulicht); Messfehler der Kantenmessung korrigiert |

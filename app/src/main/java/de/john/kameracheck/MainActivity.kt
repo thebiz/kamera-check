@@ -118,6 +118,8 @@ class MainActivity : Activity() {
     private var calibStep = -1
     private val calibSamples = ArrayList<Calib.Sample>()
     private var pendingCalibShot = false
+    /** Diagnosebild: alle Rechenschritte als Ausschnitt nebeneinander (für die Fehlersuche) */
+    private var diagOn = true
     private lateinit var calibOverlay: CalibOverlay
     private lateinit var calibBar: LinearLayout
     private lateinit var calibText: TextView
@@ -154,6 +156,8 @@ class MainActivity : Activity() {
         val calibStep: Int = -1, val calibBox: FloatArray? = null,
         /** Zielrahmen als Anteile des (verkleinerten) Ausschnitts – nur dort wird gemessen */
         val keepBox: FloatArray? = null,
+        /** Diagnose: Vorschau-Ausschnitt im Moment des Auslösens und der Ausschnitt (Anteile, Sensor-Ausrichtung) */
+        val diagPreview: Bitmap? = null, val diagRect: FloatArray? = null,
     ) {
         val yuv = java.util.TreeMap<Long, Frame>()
         val raw = java.util.TreeMap<Long, ShortArray>()
@@ -192,6 +196,7 @@ class MainActivity : Activity() {
         }
 
         loadProfile()
+        diagOn = getPreferences(MODE_PRIVATE).getBoolean("diag", true)
         strongOn = getSharedPreferences("ki", MODE_PRIVATE).getBoolean("strong_on", false)
         updateChips()
 
@@ -1238,7 +1243,31 @@ class MainActivity : Activity() {
                 ((base.cy + b[3] * base.ch - region.cy) / region.ch).coerceIn(0f, 1f),
             )
         }
-        val col = Collector(region, count, z, rotation, withRaw, calibStep, calibBox, keepBox)
+        // Diagnose: Ausschnitt um den Fokuspunkt, so wie die Vorschau ihn gerade zeigt
+        var diagPreview: Bitmap? = null
+        var diagRect: FloatArray? = null
+        if (diagOn && calibBox == null && texture.width > 0) {
+            try {
+                val tw = texture.width.toFloat()
+                val th = texture.height.toFloat()
+                val cxn = (if (focusView.shown) focusView.fx / tw else 0.5f)
+                val cyn = (if (focusView.shown) focusView.fy / th else 0.5f)
+                val hw = 0.16f
+                val hh = hw * tw / th
+                val l = (cxn - hw).coerceIn(0f, 1f - 2 * hw)
+                val t = (cyn - hh).coerceIn(0f, 1f - 2 * hh)
+                texture.bitmap?.let { full ->
+                    diagPreview = Bitmap.createBitmap(full, (l * full.width).toInt(), (t * full.height).toInt(),
+                        (2 * hw * full.width).toInt(), (2 * hh * full.height).toInt())
+                    if (diagPreview !== full) full.recycle()
+                }
+                val a = previewToCrop(l, t)
+                val b = previewToCrop(l + 2 * hw, t + 2 * hh)
+                diagRect = floatArrayOf(min(a.first, b.first), min(a.second, b.second), max(a.first, b.first), max(a.second, b.second))
+            } catch (_: Throwable) {
+            }
+        }
+        val col = Collector(region, count, z, rotation, withRaw, calibStep, calibBox, keepBox, diagPreview, diagRect)
         collecting = col
         showStatus(null)
         showHold("Ruhig halten …")
@@ -1380,6 +1409,16 @@ class MainActivity : Activity() {
                 // 1. YUV-Serie ausrichten und mitteln (Farbe, Helligkeits-Referenz)
                 val res = SuperRes.process(frames, r) { showStatus(it) }
 
+                // Diagnose: jeden Rechenschritt am selben Ausschnitt festhalten
+                val diag = ArrayList<Pair<String, Bitmap>>()
+                val dr = col.diagRect
+                fun keep(name: String, b: Bitmap) {
+                    if (dr != null) try { diag += name to diagCrop(b, dr, col.rotation) } catch (_: Throwable) {}
+                }
+                col.diagPreview?.let { diag += "1 Vorschau (Handy-Bildprozessor)" to diagScale(it) }
+                keep("2 Kamera-Einzelbild (ohne Nachschärfen)", res.single)
+                keep("3 YUV-Serie gemittelt", res.merged)
+
                 // 2. Mehrbild-Superauflösung aus RAW (echte Details auf feinerem Raster)
                 var real: Bitmap = res.merged
                 var srNote = ""
@@ -1425,6 +1464,7 @@ class MainActivity : Activity() {
                     return@execute
                 }
                 if (!half) info += "${res.used} Bilder gemittelt (ohne RAW)"
+                if (half) keep("4 RAW-Mehrbild (vor dem Entschärfen)", real)
 
                 // 3. Unschärfe messen (Schrift als Eichmaß, je Richtung, je Bildbereich)
                 showStatus("Messe Unschärfe …")
@@ -1468,6 +1508,7 @@ class MainActivity : Activity() {
                     showStatus("Entschärfe … $pct %")
                 }
                 info += "Entschärft: $decIters Durchgänge (Richardson-Lucy mit Kantenschutz)"
+                keep("5 entschärft (Echt)", sharp)
                 if (sharp !== real) real.recycle()
                 val decSecs = (SystemClock.elapsedRealtime() - tDec) / 100 / 10f
 
@@ -1501,6 +1542,7 @@ class MainActivity : Activity() {
                     Bitmap.createScaledBitmap(kiRaw, kw, kh, true).also { if (it !== kiRaw) kiRaw.recycle() }
                 else kiRaw
                 real = sharp
+                keep("6 KI pur", kiBmp)
 
                 showStatus("Speichere …")
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
@@ -1530,6 +1572,22 @@ class MainActivity : Activity() {
                 sBmp.recycle()
                 k.recycle()
                 ViewerActivity.saveToGallery(this, mix, "zoom_${stamp}_${tag}")
+                // Galerie-Mischung am Ausschnitt: dieselbe Mischung aus Kachel 5 und 6
+                val t5 = diag.firstOrNull { it.first.startsWith("5") }?.second
+                val t6 = diag.firstOrNull { it.first.startsWith("6") }?.second
+                if (t5 != null && t6 != null) {
+                    val m7 = t5.copy(Bitmap.Config.ARGB_8888, true)
+                    android.graphics.Canvas(m7).drawBitmap(
+                        Bitmap.createScaledBitmap(t6, m7.width, m7.height, true), 0f, 0f,
+                        android.graphics.Paint().apply { alpha = ViewerActivity.DEFAULT_MIX * 255 / 100 })
+                    diag += "7 Galerie (Echt + ${ViewerActivity.DEFAULT_MIX} % KI)" to m7
+                }
+                if (diag.isNotEmpty()) {
+                    showStatus("Speichere Diagnosebild …")
+                    val sheet = diagSheet(diag, info)
+                    ViewerActivity.saveToGallery(this, sheet, "diagnose_${stamp}_${tag}")
+                    sheet.recycle()
+                }
                 val small = Bitmap.createScaledBitmap(mix, dp(54f) * 2, dp(54f) * 2 * mix.height / mix.width, true)
                 mix.recycle()
 
@@ -1751,8 +1809,10 @@ class MainActivity : Activity() {
     private fun showMoreMenu(anchor: View) {
         val m = android.widget.PopupMenu(this, anchor)
         m.menu.add(0, 1, 0, if (profile != null) "Neu kalibrieren" else "Kalibrieren")
-        if (profile != null) m.menu.add(0, 2, 1, "Kalibrierung löschen")
-        m.menu.add(0, 3, 2, "Kamera-Check")
+        if (profile != null) m.menu.add(0, 4, 1, "Kalibrierung ansehen")
+        if (profile != null) m.menu.add(0, 2, 2, "Kalibrierung löschen")
+        m.menu.add(0, 5, 3, if (diagOn) "Diagnosebild: an ✓" else "Diagnosebild: aus")
+        m.menu.add(0, 3, 4, "Kamera-Check")
         m.setOnMenuItemClickListener {
             when (it.itemId) {
                 1 -> startCalibration()
@@ -1763,6 +1823,13 @@ class MainActivity : Activity() {
                     status.postDelayed({ if (!busy) showStatus(null) }, 2000)
                 }
                 3 -> startActivity(Intent(this, CheckActivity::class.java))
+                4 -> profile?.let { p -> showProfile(p, "Schärfeprofil", "Wird bei jedem Foto ab 2× genutzt.") }
+                5 -> {
+                    diagOn = !diagOn
+                    getPreferences(MODE_PRIVATE).edit().putBoolean("diag", diagOn).apply()
+                    showStatus(if (diagOn) "Diagnosebild an: landet nach jedem Foto in der Galerie" else "Diagnosebild aus")
+                    status.postDelayed({ if (!busy) showStatus(null) }, 2500)
+                }
             }
             true
         }
@@ -1823,7 +1890,9 @@ class MainActivity : Activity() {
         updateCalibUi(null)
     }
 
-    private fun endCalibration() {
+    private fun endCalibration(): Unit = runOnUiThread {
+        // läuft nach der Graustufen-Messung im Rechen-Thread – Ansicht nur im UI-Thread ändern
+        // (sonst Absturz der Anzeige: Knöpfe blieben verschwunden, Zusammenfassung kam nicht)
         calibStep = -1
         pendingCalibShot = false
         calibOverlay.center = null
@@ -1960,27 +2029,40 @@ class MainActivity : Activity() {
             }
         }
         File(filesDir, PROFILE_FILE).writeText(json.toString(2))
-        profile = SharpProfile(calibSamples.toList(), wedge?.r2, wedge?.flare, date)
-
-        // Zusammenfassung
-        val center = calibSamples.first().luma()
-        val corners = calibSamples.drop(1).map { (it.luma()[0] + it.luma()[1]) / 2f }
-        val worst = corners.maxOrNull()
-        val spread = calibSamples.maxOf { Calib.colorSpread(it) }
-        val lines = ArrayList<String>()
-        lines += "Mitte: ${fmt2((center[0] + center[1]) / 2f)} px Unschärfe (Sensorpixel)"
-        if (worst != null) lines += "Ecken: bis ${fmt2(worst)} px (${((worst / ((center[0] + center[1]) / 2f) - 1f) * 100).roundToInt()} % weicher als die Mitte)"
-        lines += "Farben: R/B weichen bis ${(spread * 100).roundToInt()} % von Grün ab"
-        if (wedge != null) {
-            lines += "Linearität des Sensors: R² ${String.format(Locale.GERMANY, "%.4f", wedge.r2)}"
-            lines += "Streulicht/Spiegelung: ${String.format(Locale.GERMANY, "%.1f", wedge.flare * 100)} %" +
-                if (wedge.flare > 0.05f) " – eher hoch, Raum abdunkeln wäre besser" else " ✓"
-        }
+        val p = SharpProfile(calibSamples.toList(), wedge?.r2, wedge?.flare, date)
+        profile = p
         endCalibration()
+        showProfile(p, "Kalibrierung gespeichert ✓",
+            "Ab jetzt nutzt jedes Foto ab 2× dieses Schärfeprofil, um die Unschärfe gezielt herauszurechnen.")
+    }
+
+    /** Zusammenfassung des Schärfeprofils als Dialog (nach dem Kalibrieren und unter Mehr › Kalibrierung ansehen). */
+    private fun showProfile(p: SharpProfile, title: String, footer: String) {
+        val samples = p.samples
+        val lines = ArrayList<String>()
+        if (samples.isNotEmpty()) {
+            val c = samples.first().luma()
+            val cm = (c[0] + c[1]) / 2f
+            lines += "Mitte: ${fmt2(cm)} px Unschärfe (Sensorpixel)"
+            val names = calibSpots.map { it.first }
+            for ((i, sm) in samples.withIndex().drop(1)) {
+                val l = sm.luma()
+                val v = (l[0] + l[1]) / 2f
+                val pct = ((v / cm - 1f) * 100).roundToInt()
+                lines += "${names.getOrElse(i) { "Punkt ${i + 1}" }}: ${fmt2(v)} px (${if (pct >= 0) "+" else ""}$pct %)"
+            }
+            val spread = samples.maxOf { Calib.colorSpread(it) }
+            lines += "Farben: R/B weichen bis ${(spread * 100).roundToInt()} % von Grün ab"
+        }
+        if (p.r2 != null && p.flare != null) {
+            lines += "Linearität des Sensors: R² ${String.format(Locale.GERMANY, "%.4f", p.r2)}"
+            lines += "Streulicht/Spiegelung: ${String.format(Locale.GERMANY, "%.1f", p.flare * 100)} %" +
+                if (p.flare > 0.05f) " – eher hoch, Raum abdunkeln wäre besser" else " ✓"
+        } else lines += "Graustufen: nicht gemessen"
         runOnUiThread {
             android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                .setTitle("Kalibrierung gespeichert ✓")
-                .setMessage(lines.joinToString("\n\n") + "\n\nAb jetzt nutzt jedes Foto ab 2× dieses Schärfeprofil beim Entschärfen.")
+                .setTitle(title)
+                .setMessage("Kalibriert am ${p.date}\n\n" + lines.joinToString("\n") + "\n\n" + footer)
                 .setPositiveButton("Fertig", null)
                 .show()
         }
@@ -2027,6 +2109,56 @@ class MainActivity : Activity() {
         File(cacheDir, name).outputStream().use { b.compress(Bitmap.CompressFormat.JPEG, 95, it) }
     }
 
+    // ───────────────────────── Diagnosebild ─────────────────────────
+
+    /** Ausschnitt r (Anteile, Sensor-Ausrichtung) aus b, gedreht und auf Kachelgröße gebracht. */
+    private fun diagCrop(b: Bitmap, r: FloatArray, rot: Int): Bitmap {
+        val x0 = (r[0] * b.width).toInt().coerceIn(0, b.width - 2)
+        val y0 = (r[1] * b.height).toInt().coerceIn(0, b.height - 2)
+        val w = ((r[2] - r[0]) * b.width).toInt().coerceIn(2, b.width - x0)
+        val h = ((r[3] - r[1]) * b.height).toInt().coerceIn(2, b.height - y0)
+        val c = Bitmap.createBitmap(b, x0, y0, w, h)
+        val c2 = if (c === b) c.copy(Bitmap.Config.ARGB_8888, false) else c
+        return diagScale(rotate(c2, rot))
+    }
+
+    private fun diagScale(b: Bitmap): Bitmap {
+        val s = Bitmap.createScaledBitmap(b, DIAG_TILE, DIAG_TILE * b.height / max(1, b.width), true)
+        if (s !== b) b.recycle()
+        return s
+    }
+
+    /** Alle Schritte als Raster (2 Spalten) mit Beschriftung, darunter die Infozeilen. */
+    private fun diagSheet(tiles: List<Pair<String, Bitmap>>, info: List<String>): Bitmap {
+        val gap = 12
+        val lab = 44
+        val th = tiles.maxOf { it.second.height }
+        val rows = (tiles.size + 1) / 2
+        val textP = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFFFFFFF.toInt(); textSize = 26f
+        }
+        val infoP = android.graphics.Paint(textP).apply { textSize = 22f; color = 0xFFBBBBBB.toInt() }
+        val infoH = 30 * (info.size + 1) + gap
+        val w = 2 * DIAG_TILE + 3 * gap
+        val h = rows * (th + lab + gap) + gap + infoH
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val cv = android.graphics.Canvas(out)
+        cv.drawColor(0xFF111111.toInt())
+        for ((i, t) in tiles.withIndex()) {
+            val x = gap + (i % 2) * (DIAG_TILE + gap)
+            val y = gap + (i / 2) * (th + lab + gap)
+            cv.drawText(t.first, x.toFloat(), (y + 32).toFloat(), textP)
+            cv.drawBitmap(t.second, x.toFloat(), (y + lab).toFloat(), null)
+            t.second.recycle()
+        }
+        var y = rows * (th + lab + gap) + gap + 26
+        for (l in info) {
+            cv.drawText(l, gap.toFloat(), y.toFloat(), infoP)
+            y += 30
+        }
+        return out
+    }
+
     private fun rotate(b: Bitmap, deg: Int): Bitmap {
         if (deg == 0) return b
         val r = Bitmap.createBitmap(b, 0, 0, b.width, b.height, Matrix().apply { postRotate(deg.toFloat()) }, true)
@@ -2035,6 +2167,7 @@ class MainActivity : Activity() {
     }
 
     companion object {
+        private const val DIAG_TILE = 540
         private const val BG = 0xFF111111.toInt()
         private const val FG = 0xFFEDEDED.toInt()
         private const val MUTED = 0xFF8A8A8A.toInt()
