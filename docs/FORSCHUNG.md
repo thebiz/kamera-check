@@ -22,7 +22,7 @@ herausholen, statt es nur hübsch zu erfinden.
 
 ---
 
-## 2. Die Rechenkette (Version 1.2)
+## 2. Die Rechenkette (Version 1.3)
 
 Ein Druck auf den Auslöser löst diese Schritte aus:
 
@@ -187,6 +187,31 @@ erzeugt Version 1.2.1 nach jedem Foto ein **Diagnosebild**: derselbe Ausschnitt 
 Rechenschritt nebeneinander (Vorschau · Einzelbild · YUV-Mittel · RAW-Mehrbild · entschärft ·
 KI · Galerie) – so wird sichtbar, welcher Schritt das Bild verschlechtert.
 
+**Erstes Diagnosebild (15.11.2026, 10× Zoom, Glas „500 g“):** ![Diagnose](diagnose_v1-2-1.jpg)
+
+| Schritt | Befund |
+|---|---|
+| 1 Vorschau | klar am schärfsten: Kleinschrift fast lesbar, Erdnuss-Struktur sichtbar |
+| 2 Kamera-Einzelbild | **viel weicher als die Vorschau** – hier geht der Großteil verloren |
+| 3 YUV gemittelt | kaum besser als 2 |
+| 4 RAW-Mehrbild | deutlich besser als 2/3 (echter Gewinn der Mehrbild-Technik) |
+| 5 entschärft | etwas klarer, erste Säume |
+| 6 KI | Plastik-Look, glatte Flächen |
+
+**Schluss:** Unsere Rechenkette arbeitet richtig, aber sie startet mit schlechterem
+Rohmaterial als die Vorschau. Wir holen das ganze Sensorbild (12 MP, je 4 Pixel
+zusammengefasst) und schneiden 10× selbst heraus – nur ≈ 400 × 300 echte Pixel.
+Die Vorschau dagegen bekommt vom Bildprozessor vermutlich die Bildmitte in voller
+50-MP-Auflösung („In-Sensor-Zoom“). Den offiziellen Weg zur vollen Auflösung
+(Ultra-HR) gibt Xiaomi für fremde Apps nicht frei (siehe Kamera-Check).
+
+**Version 1.3 – Hintertür Kamera-Zoom:** Die App lässt den Bildprozessor jetzt selbst bis
+2× zoomen (dort schaltet der Sensor vermutlich auf volle Auflösung der Mitte) und rechnet
+nur den Rest des Zooms selbst. RAW entfällt in diesem Modus, weil der RAW-Strom den Zoom
+nicht mitmacht. Unter *Mehr › Quelle* lässt sich der alte Weg wieder einschalten – so
+können beide Diagnosebilder direkt verglichen werden. Ob die Hintertür wirklich mehr
+Detail liefert, zeigt erst das nächste Diagnosebild (Kachel 2 gegen Kachel 1).
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -201,6 +226,7 @@ KI · Galerie) – so wird sichtbar, welcher Schritt das Bild verschlechtert.
 | **Simulation ersetzt nicht das echte Foto** – Grafiker-Augen finden, was Zahlen übersehen | daraus: Version 1.0 setzt auf Physik statt Raten |
 | Bei ebenem Motiv muss alles gleich scharf sein; Ungleichmäßigkeit = Rechenfehler | Johns Hinweis; jetzt automatische Prüfung |
 | Die eigene Messmethode hatte einen festen Fehler (+0,5 px²) – sichtbar erst mit bekannten Testkanten | Kalibrier-Simulation, Version 1.1 |
+| Das Rohmaterial entscheidet: Eine gute Rechenkette auf zusammengefassten 12-MP-Pixeln verliert gegen die einfache Vorschau aus der hochauflösenden Bildmitte | Diagnosebild, Version 1.2.1 |
 | Die Handy-Vorschau ist ein starker Gegner: Bildprozessor schärft und mittelt bereits – unsere Kette muss sich daran messen, Schritt für Schritt | Johns Screenshot-Vergleich, Version 1.2 |
 | Eine Erkennung, die nur den Idealfall kennt, scheitert in der Hand (Schräglage, Ausbrennen) | Johns 4 Fehlversuche mit den Graustufen; Version 1.2 |
 
@@ -234,6 +260,7 @@ KI · Galerie) – so wird sichtbar, welcher Schritt das Bild verschlechtert.
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.3 | Quelle Kamera-Zoom: Bildprozessor zoomt bis 2× (hochauflösende Bildmitte), Rest rechnet die App; umschaltbar |
 | 1.2.1 | Diagnosebild aller Rechenschritte; Kalibrierung ansehen; Fehler „Knöpfe weg“ nach dem Kalibrieren behoben |
 | 1.2 | Kalibrierung überarbeitet: Anweisungen unten, robuste Graustufen-Erkennung (schräg, Perspektive, ausgebrannt), überspringbar, schneller (nur Rahmen, 12 Bilder), Belichtung −1 Blende |
 | 1.1 | Kalibrierung mit Testmuster auf dem iPad: Schärfeprofil je Bildbereich, Farbe und Richtung; Graustufen-Prüfung (Linearität, Streulicht); Messfehler der Kantenmessung korrigiert |

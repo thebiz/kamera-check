@@ -11,8 +11,8 @@ android {
         applicationId = "de.john.kameracheck"
         minSdk = 30
         targetSdk = 34
-        versionCode = 14
-        versionName = "1.2.1"
+        versionCode = 15
+        versionName = "1.3"
 
         ndk {
             abiFilters += "arm64-v8a"

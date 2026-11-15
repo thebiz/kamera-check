@@ -120,6 +120,12 @@ class MainActivity : Activity() {
     private var pendingCalibShot = false
     /** Diagnosebild: alle Rechenschritte als Ausschnitt nebeneinander (für die Fehlersuche) */
     private var diagOn = true
+    /**
+     * Quelle Kamera-Zoom: Der Bildprozessor zoomt selbst bis 2× – dabei liest das Handy die Bildmitte
+     * vermutlich in voller 50-MP-Auflösung aus (wie die Vorschau). Den Rest des Zooms rechnen wir.
+     * Aus = bisheriger Weg (ganzes 12-MP-Bild + RAW).
+     */
+    private var ispZoomOn = true
     private lateinit var calibOverlay: CalibOverlay
     private lateinit var calibBar: LinearLayout
     private lateinit var calibText: TextView
@@ -158,6 +164,8 @@ class MainActivity : Activity() {
         val keepBox: FloatArray? = null,
         /** Diagnose: Vorschau-Ausschnitt im Moment des Auslösens und der Ausschnitt (Anteile, Sensor-Ausrichtung) */
         val diagPreview: Bitmap? = null, val diagRect: FloatArray? = null,
+        /** Zoom, den der Bildprozessor des Handys selbst macht (1 = ganzes Sensorbild, Ausschnitt rechnen wir) */
+        val isp: Float = 1f,
     ) {
         val yuv = java.util.TreeMap<Long, Frame>()
         val raw = java.util.TreeMap<Long, ShortArray>()
@@ -197,6 +205,7 @@ class MainActivity : Activity() {
 
         loadProfile()
         diagOn = getPreferences(MODE_PRIVATE).getBoolean("diag", true)
+        ispZoomOn = getPreferences(MODE_PRIVATE).getBoolean("ispzoom", true)
         strongOn = getSharedPreferences("ki", MODE_PRIVATE).getBoolean("strong_on", false)
         updateChips()
 
@@ -1220,15 +1229,18 @@ class MainActivity : Activity() {
         lupeBox.visibility = View.GONE
 
         val z = zoom
-        val withRaw = z >= 2f && rawReader != null
+        val calibNow = calibStep >= 0
+        val isp = if (ispZoomOn && !calibNow && z >= 2f) min(z, ISP_ZOOM) else 1f
+        val withRaw = z >= 2f && rawReader != null && isp == 1f
         // RAW: so viele Bilder, wie ins Speicherbudget passen (8 bis 30)
         // Kalibrieren: nur den Zielrahmen (plus Rand) auslesen und 12 Bilder – viel schneller
-        val calibBox = if (calibStep >= 0) calibBoxCrop() else null
+        val calibBox = if (calibNow) calibBoxCrop() else null
         val region = if (calibBox != null) Region.forBox(yuvSize.width, yuvSize.height, z, calibBox)
-            else Region.compute(yuvSize.width, yuvSize.height, z)
+            else Region.compute(yuvSize.width, yuvSize.height, z / isp)
         val rawBytes = region.rw.toLong() * region.rh * 2
         val count = when {
             calibBox != null -> 12
+            isp > 1f -> (YUV_BUDGET / (region.rw.toLong() * region.rh * 3 / 2)).toInt().coerceIn(6, 16)
             withRaw -> (RAW_BUDGET / rawBytes).toInt().coerceIn(8, 30)
             z >= 2f -> 16
             else -> 8
@@ -1267,7 +1279,7 @@ class MainActivity : Activity() {
             } catch (_: Throwable) {
             }
         }
-        val col = Collector(region, count, z, rotation, withRaw, calibStep, calibBox, keepBox, diagPreview, diagRect)
+        val col = Collector(region, count, z, rotation, withRaw, calibStep, calibBox, keepBox, diagPreview, diagRect, isp)
         collecting = col
         showStatus(null)
         showHold("Ruhig halten …")
@@ -1278,8 +1290,8 @@ class MainActivity : Activity() {
                 val b = baseRequest(CameraDevice.TEMPLATE_PREVIEW)
                 b.addTarget(reader!!.surface)
                 if (withRaw) b.addTarget(rawReader!!.surface)
-                // Ganzes Sensorbild holen, den Ausschnitt rechnen wir selbst
-                b.set(CaptureRequest.CONTROL_ZOOM_RATIO, 1f)
+                // Ganzes Sensorbild holen (oder bis 2× vom Bildprozessor zoomen lassen), den Rest rechnen wir selbst
+                b.set(CaptureRequest.CONTROL_ZOOM_RATIO, col.isp)
                 b.set(CaptureRequest.CONTROL_AE_LOCK, true)
                 b.set(CaptureRequest.CONTROL_AWB_LOCK, true)
                 // Kamera-eigenes Schärfen und Glätten aus: echtes Detail behalten,
@@ -1426,7 +1438,9 @@ class MainActivity : Activity() {
                 var gridU = 1f
                 lastShakePx = 0f
                 val info = ArrayList<String>()
-                info += "${fmt(col.zoomAtShot)}× Zoom"
+                info += "${fmt(col.zoomAtShot)}× Zoom" + if (col.isp > 1f)
+                    " · Quelle Kamera-Zoom ${fmt(col.isp)}× + eigener Ausschnitt ${fmt(col.zoomAtShot / col.isp)}× · ${r.cw}×${r.ch} px"
+                else " · Quelle ganzes Sensorbild · ${r.cw}×${r.ch} px"
                 if (raws != null && rawParamsBase != null) {
                     try {
                         val geo = RawSR.Geo(r.x0, r.y0, r.rw, r.rh, r.cx, r.cy, r.cw, r.ch)
@@ -1472,7 +1486,7 @@ class MainActivity : Activity() {
                 info += uniformity
 
                 // 4. Kameramodell: physikalisches Minimum, Messung darauf eingrenzen
-                val phys = physicalMinimum(half)
+                val phys = physicalMinimum(half, col.isp)
                 val prof = if (half) profile else null
                 val swY = yuvSize.width.toFloat()
                 val shY = yuvSize.height.toFloat()
@@ -1682,13 +1696,14 @@ class MainActivity : Activity() {
     }
 
     /** Minimale Unschärfe laut Kameramodell (RAW-Pixel). */
-    private fun physicalMinimum(merged: Boolean): CameraModel.Breakdown {
+    private fun physicalMinimum(merged: Boolean, isp: Float = 1f): CameraModel.Breakdown {
         val c = chars
         val n = c?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)?.firstOrNull() ?: 1.6f
         val phys = c?.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
         val pix = c?.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
         val pitchUm = if (phys != null && pix != null) phys.width * 1000f / pix.width else 1.6f
-        return CameraModel.minimum(n, pitchUm, lastShakePx, merged)
+        // Kamera-Zoom: ein Bildpunkt entspricht einer kleineren Fläche auf dem Sensor
+        return CameraModel.minimum(n, pitchUm / isp, lastShakePx, merged)
     }
 
     /** Helligkeit entschärfen, Farbe beibehalten (Helligkeits-Unterschied wird auf R, G, B übertragen). */
@@ -1812,7 +1827,8 @@ class MainActivity : Activity() {
         if (profile != null) m.menu.add(0, 4, 1, "Kalibrierung ansehen")
         if (profile != null) m.menu.add(0, 2, 2, "Kalibrierung löschen")
         m.menu.add(0, 5, 3, if (diagOn) "Diagnosebild: an ✓" else "Diagnosebild: aus")
-        m.menu.add(0, 3, 4, "Kamera-Check")
+        m.menu.add(0, 6, 4, if (ispZoomOn) "Quelle: Kamera-Zoom ✓" else "Quelle: ganzes Sensorbild + RAW")
+        m.menu.add(0, 3, 5, "Kamera-Check")
         m.setOnMenuItemClickListener {
             when (it.itemId) {
                 1 -> startCalibration()
@@ -1824,6 +1840,12 @@ class MainActivity : Activity() {
                 }
                 3 -> startActivity(Intent(this, CheckActivity::class.java))
                 4 -> profile?.let { p -> showProfile(p, "Schärfeprofil", "Wird bei jedem Foto ab 2× genutzt.") }
+                6 -> {
+                    ispZoomOn = !ispZoomOn
+                    getPreferences(MODE_PRIVATE).edit().putBoolean("ispzoom", ispZoomOn).apply()
+                    showStatus(if (ispZoomOn) "Quelle: Kamera-Zoom bis 2× (hochauflösende Bildmitte)" else "Quelle: ganzes Sensorbild + RAW (bisher)")
+                    status.postDelayed({ if (!busy) showStatus(null) }, 2500)
+                }
                 5 -> {
                     diagOn = !diagOn
                     getPreferences(MODE_PRIVATE).edit().putBoolean("diag", diagOn).apply()
@@ -2168,6 +2190,9 @@ class MainActivity : Activity() {
 
     companion object {
         private const val DIAG_TILE = 540
+        /** Bis zu diesem Zoom macht der Bildprozessor den Ausschnitt (In-Sensor-Zoom des 50-MP-Sensors) */
+        private const val ISP_ZOOM = 2f
+        private const val YUV_BUDGET = 150_000_000L
         private const val BG = 0xFF111111.toInt()
         private const val FG = 0xFFEDEDED.toInt()
         private const val MUTED = 0xFF8A8A8A.toInt()

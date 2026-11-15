@@ -2,6 +2,9 @@
 
 Aufruf: python3 tools/md2html.py docs/FORSCHUNG.md Forschung.html
 """
+import base64
+import os
+import re
 import sys
 
 import markdown
@@ -25,12 +28,21 @@ table { width: 100%; border-collapse: collapse; font-size: 0.9em; display: block
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
 th { color: var(--muted); font-weight: 600; }
 code { font-size: 0.9em; }
+img { max-width: 100%; border-radius: 8px; }
 hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
 """
 
 src, dst = sys.argv[1], sys.argv[2]
 text = open(src, encoding="utf-8").read()
 body = markdown.markdown(text, extensions=["tables"])
+# Bilder einbetten, damit die Seite eine einzige Datei bleibt (lesbar auf dem Handy)
+def embed(m):
+    path = os.path.join(os.path.dirname(src), m.group(1))
+    if not os.path.exists(path):
+        return m.group(0)
+    data = base64.b64encode(open(path, "rb").read()).decode()
+    return f'src="data:image/jpeg;base64,{data}"'
+body = re.sub(r'src="([^":]+\.jpe?g)"', embed, body)
 title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), "Forschung")
 html = f"""<!doctype html>
 <html lang="de"><head><meta charset="utf-8">
