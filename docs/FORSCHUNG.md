@@ -517,6 +517,19 @@ Rausch-Korrektur für das feine Raster und entsprechend mehr Rechenzeit fürs En
 Ehrliche Erwartung: Die Kamera hat diese Bilder schon entmosaikt (Farben ergänzt) und dabei leicht
 geglättet; ob das Handzittern darunter noch echte Feinheit liefert, muss der Test zeigen.
 
+**Ergebnis feines Raster (15.11.2026, 17 Uhr, Version 1.13.1):** ![Vergleich A/B 1.13.1](vergleich_ab_v1-13-1.jpg)
+Johns Urteil: A wirkt schärfer und kontrastreicher. Die Zahlen bestätigen das eindeutig: B misst
+3,2/3,5 px Unschärfe auf dem doppelt so feinen Raster – umgerechnet **1,6/1,75 px, genau so viel wie A
+(1,6/1,7 px)**. Das feine Raster hat also keinen Hauch echter Auflösung gewonnen, nur mehr Pixel für
+dieselbe Information (und viermal so viel Rechenzeit: 48 statt 12 KI-Kacheln).
+
+**Was daraus folgt – die wichtigste Erkenntnis des Tages:** Die Grenze ist nicht das Pixelraster,
+sondern die **Unschärfe von rund 1,6 px**, die schon im Bild steckt (Objektiv, Entmosaiken und Glätten
+der Kamera). Super-Resolution hilft nur, wenn das Raster der Engpass ist. Hier ist es die Unschärfe –
+und gegen die hilft nur Entfalten, und wie weit man entfalten kann, bestimmt das **Rauschen**.
+Nächste Hebel deshalb: mehr Licht pro Bild bzw. mehr Bilder (weniger Rauschen → kräftiger
+entfalten), und eine KI, die genau diese Kamera kennt.
+
 ---
 
 ## 4. Was wir gelernt haben
