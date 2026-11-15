@@ -13,10 +13,13 @@ Experimentelle KI-Zoom-Kamera für Android (getestet auf Poco X7 Pro).
 - **Lagesensor:** misst die Verwacklung jedes Bildes der Serie – verwackelte Bilder zählen weniger oder fliegen raus
 - **KI: schnell / stark:** stark = großes Modell (RealESRGAN_x4plus), deutlich sauberere Kanten, rechnet bis ca. 3 Minuten
 - **Bis zu 30 RAW-Bilder** pro Serie (je nach Ausschnitt), kachelweise ausgerichtet – auch leichte Drehungen der Hand und Bewegung im Bild werden sauber verrechnet
+- **Kalibrierung (Mehr › Kalibrieren):** Testmuster auf dem iPad (QR-Code in der App) – die App vermisst das eigene Objektiv (Mitte, Ecken, je Farbe) und nutzt das Schärfeprofil beim Entschärfen
 - **Fokuspunkt mit Verfolgung:** Tippen setzt einen Rahmen, der am Objekt klebt und laufend nachstellt (weiß = sucht, grün = scharf, orange = unscharf, grau gestrichelt = Ziel verloren). Rahmen ziehen verschiebt ihn, Doppeltippen = Autofokus
 - **Auslöse-Ring:** füllt sich, solange die Serie läuft; Vibration + „Fertig – du kannst loslassen“, sobald gerechnet wird
 - „Check“ zeigt, welche Kamera-Funktionen das Handy freigibt
 - Die App wählt beim Start automatisch den schnellsten Rechenweg (KI-Chip oder Prozessor)
+
+**Testmuster fürs iPad:** in der App unter *Mehr › Kalibrieren* (QR-Code) · Quelle: [docs/kalibrierung.html](docs/kalibrierung.html)
 
 **Forschungsdokument (lesbar):** [Forschung.html](https://github.com/thebiz/kamera-check/releases/latest/download/Forschung.html) · Quelle: [docs/FORSCHUNG.md](docs/FORSCHUNG.md)
 

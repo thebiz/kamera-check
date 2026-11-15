@@ -31,6 +31,13 @@ Hersteller-Software austesten und überwinden.
 | 0.8 | **Unschärfe messen und KI-Eingang anpassen**: Aus Kanten (Sprunghöhe / maximale Steigung) wird die Unschärfe σ berechnet; das Bild wird vor der KI so verkleinert, dass die Rest-Unschärfe im Trainingsbereich der KI liegt (≈ 1–1,8 px, abhängig von σ). Beseitigt den „Saum“ um Schrift |
 | 0.9 | **Schrift als Eichmaß** (Johns Idee): erkannte Buchstaben liefern echte Sprungkanten, an denen die Unschärfe bevorzugt gemessen wird; **richtungsabhängige Unschärfe** (σx/σy) und getrenntes Verkleinern je Richtung vor der KI; **Lagesensor** misst die Verwacklung jedes Bildes der Serie (Drehrate × Belichtungszeit × Brennweite in Pixeln) – verwackelte Bilder werden abgewertet oder aussortiert |
 
+## 15.11.2026
+
+| Version | Ansatz |
+|---|---|
+| 1.0 | **Physik statt Raten** (nach Johns Kritik am künstlichen Look): Kameramodell (Beugung, Pixelfläche, Mehrbild-Kern, Verwacklung) begrenzt die gemessene Unschärfe; physikalisches Entschärfen (Richardson-Lucy mit Kantenschutz) ohne Verkleinern; KI nur noch zu 30 %; automatische Gleichmäßigkeitsprüfung (ebenes Motiv ⇒ überall gleich scharf, Johns Hinweis) |
+| 1.1 | **Kalibrierung mit Testmuster auf dem iPad** (Johns Idee „Schärfeprofil der eigenen Kamera“, inkl. Graustufen als Referenzwerte): geführte Aufnahme an 5 Sensorpositionen bei festem Zoom mit automatischem Scharfstellen; Messung der Unschärfe je Farbe und Richtung in den linearen RAW-Daten des Messrahmens; Herausrechnen der Verwacklung (Lagesensor); Graustufen in gleichen Lichtschritten zur Prüfung der Linearität und Messung des Streulichts; Profil fließt je Bildkachel ins Entschärfen ein (σ² = Profil² + Zusatz²). Dabei Messfehler der Kantenmethode (+0,5 px²) entdeckt und korrigiert |
+
 ### Ideen für später (Stand 14.11.2026)
 - Schrift-Eichmaß weiterdenken: Form des erkannten Buchstabens als Vorlage für die
   Unschärfe-Form (Punktbildfunktion), ohne die Buchstaben selbst zu „verschönern“

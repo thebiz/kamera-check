@@ -1,6 +1,6 @@
 # Forschungsprojekt KI-Zoom – wie die Kamera funktioniert
 
-*Stand: Version 1.0 · 14.11.2026 · Idee und Richtung: John · Umsetzung mit Claude*
+*Stand: Version 1.1 · 15.11.2026 · Idee und Richtung: John · Umsetzung mit Claude*
 
 Dieses Dokument erklärt in verständlicher Sprache, was die App mit einem Foto macht,
 warum sie es so macht und was wir dabei gelernt haben. Es wird mit jeder Version
@@ -22,7 +22,7 @@ herausholen, statt es nur hübsch zu erfinden.
 
 ---
 
-## 2. Die Rechenkette (Version 1.0)
+## 2. Die Rechenkette (Version 1.1)
 
 Ein Druck auf den Auslöser löst diese Schritte aus:
 
@@ -84,6 +84,15 @@ Die Quellen addieren sich quadratisch. Die gemessene Unschärfe wird auf den Ber
 zwischen diesem Minimum und „Minimum + 2,5 Pixel“ begrenzt – was außerhalb liegt, ist
 physikalisch unplausibel und wohl ein Messfehler.
 
+### Schritt 6b – Schärfeprofil des eigenen Objektivs (Kalibrierung)
+Liegt eine Kalibrierung vor (siehe Abschnitt 3), weiß die App, wie unscharf **dieses**
+Objektiv an jeder Stelle des Sensors abbildet – die Ecken sind fast immer weicher als
+die Mitte. Für jede Kachel des Bildes wird die Unschärfe dann so zusammengesetzt:
+> σ² = σ²(Profil an dieser Stelle) + σ²(Zusatz dieses Fotos)
+
+Der Zusatz (Fokus-Restfehler, Verwacklung) ist das, was das Foto über das Profil hinaus
+unscharf ist – gemessen an der Bildmitte.
+
 ### Schritt 7 – Physikalisch entschärfen
 Mit der gemessenen Unschärfe wird das Bild **zurückgerechnet** (Richardson-Lucy-Verfahren):
 > „Wenn mein geschätztes scharfes Bild mit dieser Unschärfe verwischt würde – stimmt es
@@ -101,7 +110,50 @@ zwischen „Echt“ (0 %) und „KI“ (100 %) wählen.
 
 ---
 
-## 3. Was wir gelernt haben
+## 3. Kalibrierung mit Testmuster (ab Version 1.1)
+
+**Idee (John):** Statt die Unschärfe in jedem Foto nur zu schätzen, misst die App einmal
+genau, wie das eigene Objektiv abbildet – ein „Schärfeprofil“.
+
+**Ablauf:** Das iPad zeigt eine Testmuster-Seite (Link per QR-Code in der App, *Mehr ›
+Kalibrieren*). Das Handy fotografiert das Muster aus etwa 1,5 m bei 2× Zoom an fünf
+Stellen des Bildes (Mitte, vier Ecken) und zum Schluss eine Graustufen-Treppe.
+Vor jeder Aufnahme stellt die App selbst auf die Rahmenmitte scharf.
+
+**Warum das iPad-Display nicht stört:** Aus 1,5 m sieht ein Kamerapixel etwa fünf
+iPad-Pixel – das Pixelraster des Displays verschwimmt vollständig, jede Kante ist für die
+Kamera ein perfekter Sprung. Gemessen wird nur die *Breite* des Übergangs, nicht die
+absolute Helligkeit; Farbstich oder leichte Spiegelung verfälschen das kaum.
+
+**Was gemessen wird:**
+
+| Muster | Messung | Wozu |
+|---|---|---|
+| Schräge schwarze Quadrate | Unschärfe σ je **Farbe** (R, G, B) und **Richtung** (x, y), in den linearen RAW-Daten | Schärfeprofil über den Sensor; Farben zeigen, ob das Objektiv Rot und Blau anders abbildet als Grün |
+| 11 Graustufen in gleichen Lichtschritten | Gerade durch Messwert ↔ Licht | **Linearität** des Sensors (Voraussetzung für Mehrbild und Entschärfen) und **Streulicht** (Rest-Helligkeit bei Schwarz) |
+
+Schwarz-weiße Kanten genügen für die Farbmessung: An jeder Kante springt jeder der drei
+Farbkanäle – so wird jede Farbe an exakt derselben Kante vermessen.
+
+Die Verwacklung während der Kalibrier-Aufnahme (Lagesensor) wird herausgerechnet.
+Das Profil wird auf dem Handy gespeichert; zwischen den fünf Messpunkten wird nach
+Abstand gewichtet interpoliert.
+
+**Messfehler der Kantenmessung entdeckt und korrigiert:** Beim Testen mit bekannter
+Unschärfe zeigte sich, dass die Steigungsmessung (Differenz über 2 Pixel) jede Kante um
+eine feste Varianz von ≈ 0,5 px² verbreitert. Seit Version 1.1 wird das herausgerechnet:
+> σ = √(σ²gemessen − 0,5)
+
+Ergebnis im Test: Soll 0,65/0,59 px → gemessen 0,64/0,60 px (Grün), ebenso genau für
+Rot und Blau. Davon profitiert auch jedes normale Foto.
+
+**Simulation (`tools/sim/CalTest.kt`):** Streulicht 2,91 % vorgegeben → 2,91 % gemessen,
+Linearität R² = 1,0000; Graustufen werden waagerecht wie senkrecht und in beiden
+Richtungen erkannt, auch wenn die äußeren Stufen angeschnitten sind.
+
+---
+
+## 4. Was wir gelernt haben
 
 | Erkenntnis | Wie belegt |
 |---|---|
@@ -112,12 +164,16 @@ zwischen „Echt“ (0 %) und „KI“ (100 %) wählen.
 | Verkleinern vor der KI beseitigt den Saum, wirkt aber künstlich (Relief, Schatten in Punzen, glatte Pappe) | Johns Urteil am echten Foto (Version 0.9) – die Simulation hatte das nicht gezeigt |
 | **Simulation ersetzt nicht das echte Foto** – Grafiker-Augen finden, was Zahlen übersehen | daraus: Version 1.0 setzt auf Physik statt Raten |
 | Bei ebenem Motiv muss alles gleich scharf sein; Ungleichmäßigkeit = Rechenfehler | Johns Hinweis; jetzt automatische Prüfung |
+| Die eigene Messmethode hatte einen festen Fehler (+0,5 px²) – sichtbar erst mit bekannten Testkanten | Kalibrier-Simulation, Version 1.1 |
 
 ---
 
-## 4. Offene Fragen und nächste Ideen
-- **Objektiv vermessen:** einmalig ein Testmuster auf dem Monitor fotografieren und
-  die echte Unschärfe des Objektivs je Bildbereich und Zoomstufe bestimmen
+## 5. Offene Fragen und nächste Ideen
+- **Lernen nebenbei:** das Schärfeprofil mit jedem normalen Foto verfeinern – erst, wenn
+  sich die Kalibrierung bewährt hat (sonst lernt das Profil Verwacklung und Fehlfokus mit)
+- **Farben getrennt entschärfen:** heute fließen R, G, B gewichtet in die Helligkeits-Schärfe
+  ein; besser wäre, jede Farbebene im RAW-Rechenkern mit ihrem eigenen σ zu entschärfen
+- Ausgedrucktes Muster auf mattem Papier als Alternative zum iPad (kein Display-Einfluss)
 - **Entfernung nutzen:** Fokusentfernung, bekannte Größen (Buchstabenhöhe), zwei Kameras
   (Stereo) oder GPS + Karte (Kirchen in Hamburg) – für das Kameramodell
 - **Fokusreihe:** mehrere Fokusstufen kombinieren
@@ -126,7 +182,7 @@ zwischen „Echt“ (0 %) und „KI“ (100 %) wählen.
 
 ---
 
-## 5. Versionsgeschichte (kurz)
+## 6. Versionsgeschichte (kurz)
 | Version | Neu |
 |---|---|
 | 0.1 | Kamera-Freigaben auslesen |
@@ -139,3 +195,5 @@ zwischen „Echt“ (0 %) und „KI“ (100 %) wählen.
 | 0.8 | Unschärfe messen, große Regler |
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
+| 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.1 | Kalibrierung mit Testmuster auf dem iPad: Schärfeprofil je Bildbereich, Farbe und Richtung; Graustufen-Prüfung (Linearität, Streulicht); Messfehler der Kantenmessung korrigiert |
