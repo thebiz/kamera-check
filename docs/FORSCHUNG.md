@@ -428,6 +428,23 @@ Der Weg über App-Namen wurde nicht weiter verfolgt – er hätte allenfalls wei
 freigeschaltet, nicht die Auflösung. Der funktionierende Weg bleibt: 50-MP-JPEG aus der
 Xiaomi-Kamera (Pro-Modus, Format 3:4) + Import + Schärfe zurückholen (DPIR).
 
+**Erster Tagestest (15.11.2026, nachmittags):** ![Diagnose 1.10](diagnose_v1-10.jpg)
+
+Johns Urteil: Kleinschrift „von unlesbar zu lesbar – erstaunlich gut“. Drei Beobachtungen:
+1. Bei Spiegelungen (Auto) **verschob sich die Farbe** – die App hatte die Farben getrennt
+   zurückgerechnet, weil die Messung R 0,9 · G 0,8 · B 1,0 ergab. An fertig bearbeiteten
+   Kamerabildern ist so eine Messung zu unsicher.
+2. **Große, kräftige Schrift** wirkt mit der Physik-Rechnung randschärfer, **feine, helle Schrift**
+   auf dunklem Grund mit DPIR (vgl. Kachel 5 und 6: „CAUTION“).
+3. Die Schärfe passt manchmal nicht zur Entfernung (Fernes zu knackig) – offen.
+
+**Version 1.11:** nur noch die Helligkeit wird geschärft, Farben bleiben vom Original; an
+kräftigen Kanten (Kontrast im 7 × 7-Umfeld) wird bis zu 70 % Physik-Schärfe eingemischt, sonst
+DPIR, weich überblendet; Knopf „Echt ⇄ KI umschalten“ im Viewer für den direkten Vergleich an
+derselben Stelle; **Kalibrieren für 50 MP**: fünf Xiaomi-Fotos des iPad-Musters (Mitte, Ecken),
+die App findet das Muster selbst und misst die Unschärfe in Pixeln des 50-MP-Fotos – genutzt
+beim Import je Bildstelle (Profil² + Zusatz² dieses Fotos), wie beim RAW-Weg.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -479,6 +496,7 @@ Xiaomi-Kamera (Pro-Modus, Format 3:4) + Import + Schärfe zurückholen (DPIR).
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.11 | Kalibrieren für 50 MP, Farben vom Original, Physik-Schärfe an kräftigen Kanten, Echt ⇄ KI |
 | 1.10 | „Entschärfen“ heißt jetzt „Schärfe zurückholen“ (Johns Wunsch); 50-MP-Hinweis mit Pro-Modus und Format 3:4 |
 | 1.9.3 | Kamera-Freigaben im System lesen; Fehlalarm 50 MP korrigiert |
 | 1.9 | Erste 50-MP-Aufnahme in der eigenen App (versteckte Xiaomi-Größe + Remosaic); „Foto prüfen: echte 50 MP?“ |
