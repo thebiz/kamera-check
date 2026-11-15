@@ -70,7 +70,7 @@ class ViewerActivity : Activity() {
         panel.addView(mixLabel)
 
         val seek = BigSlider(this).apply {
-            setValue(DEFAULT_MIX / 100f)
+            setValue(startMix / 100f)
             onChange = { v -> setMix(v) }
         }
         panel.addView(seek, LinearLayout.LayoutParams(-1, -2))
@@ -94,7 +94,7 @@ class ViewerActivity : Activity() {
 
         root.addView(panel)
         setContentView(root)
-        setMix(DEFAULT_MIX / 100f)
+        setMix(startMix / 100f)
 
         val normal = BitmapFactory.decodeFile(File(cacheDir, NORMAL).path)
         val ki = BitmapFactory.decodeFile(File(cacheDir, KI).path)
@@ -162,6 +162,8 @@ class ViewerActivity : Activity() {
         const val REAL = "letztes_mehrbild.jpg"
         const val KI = "letztes_ki.jpg"
         const val DEFAULT_MIX = 30
+        /** KI-Anteil, mit dem die Ansicht startet (0, wenn Schrift erkannt wurde – dort erfindet die KI) */
+        @Volatile var startMix = DEFAULT_MIX
         const val INFO = "letztes_info.txt"
         private const val BG = 0xFF111111.toInt()
         private const val FG = 0xFFEDEDED.toInt()

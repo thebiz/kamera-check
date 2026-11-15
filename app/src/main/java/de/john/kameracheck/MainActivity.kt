@@ -1419,7 +1419,8 @@ class MainActivity : Activity() {
                 val r = col.region
 
                 // 1. YUV-Serie ausrichten und mitteln (Farbe, Helligkeits-Referenz)
-                val res = SuperRes.process(frames, r) { showStatus(it) }
+                val yuvShake = if (!col.withRaw) shakeWeights(yuvKeys, col.results) else null
+                val res = SuperRes.process(frames, r, yuvShake?.first) { showStatus(it) }
 
                 // Diagnose: jeden Rechenschritt am selben Ausschnitt festhalten
                 val diag = ArrayList<Pair<String, Bitmap>>()
@@ -1477,13 +1478,20 @@ class MainActivity : Activity() {
                     calibMessage("RAW-Bilder waren nicht verfügbar – bitte nochmal auslösen.")
                     return@execute
                 }
-                if (!half) info += "${res.used} Bilder gemittelt (ohne RAW)"
+                if (!half) {
+                    info += "${res.used} von ${res.total} Bildern verrechnet, kachelweise ausgerichtet" +
+                        (if (SuperRes.dropped > 0) " (${SuperRes.dropped} unscharf/verrutscht aussortiert)" else "")
+                    yuvShake?.let { info += "Lagesensor: ${it.second}" }
+                }
                 if (half) keep("4 RAW-Mehrbild (vor dem Entschärfen)", real)
 
                 // 3. Unschärfe messen (Schrift als Eichmaß, je Richtung, je Bildbereich)
                 showStatus("Messe Unschärfe …")
                 val (blur, uniformity) = measureBlur(real, col.rotation)
                 info += uniformity
+                // Kleine Schrift: KI erfindet Striche statt Buchstaben (Diagnosebild 1.3) – Galerie ohne KI
+                val galleryMix = if (blur.fromText) 0 else ViewerActivity.DEFAULT_MIX
+                ViewerActivity.startMix = galleryMix
 
                 // 4. Kameramodell: physikalisches Minimum, Messung darauf eingrenzen
                 val phys = physicalMinimum(half, col.isp)
@@ -1546,6 +1554,7 @@ class MainActivity : Activity() {
                 if (input !== sharp) input.recycle()
                 val secs = (SystemClock.elapsedRealtime() - t0) / 100 / 10f
                 info += "KI ${if (strongOn) "stark" else "schnell"} (${model.backend}): ${fmt(secs)} s · Entschärfen ${fmt(decSecs)} s"
+                if (galleryMix == 0) info += "Schrift erkannt → Galerie ohne KI (Regler im Viewer bleibt)"
 
                 // Zielgröße: Mehrbild ×2 (RAW) bzw. Einzelbild ×4, lange Seite höchstens 4096 px
                 val mult = if (half) 2f else 4f
@@ -1581,7 +1590,7 @@ class MainActivity : Activity() {
                 val mix = Bitmap.createBitmap(k.width, k.height, Bitmap.Config.ARGB_8888)
                 android.graphics.Canvas(mix).apply {
                     drawBitmap(sBmp, 0f, 0f, null)
-                    drawBitmap(k, 0f, 0f, android.graphics.Paint().apply { alpha = ViewerActivity.DEFAULT_MIX * 255 / 100 })
+                    drawBitmap(k, 0f, 0f, android.graphics.Paint().apply { alpha = galleryMix * 255 / 100 })
                 }
                 sBmp.recycle()
                 k.recycle()
@@ -1593,8 +1602,8 @@ class MainActivity : Activity() {
                     val m7 = t5.copy(Bitmap.Config.ARGB_8888, true)
                     android.graphics.Canvas(m7).drawBitmap(
                         Bitmap.createScaledBitmap(t6, m7.width, m7.height, true), 0f, 0f,
-                        android.graphics.Paint().apply { alpha = ViewerActivity.DEFAULT_MIX * 255 / 100 })
-                    diag += "7 Galerie (Echt + ${ViewerActivity.DEFAULT_MIX} % KI)" to m7
+                        android.graphics.Paint().apply { alpha = galleryMix * 255 / 100 })
+                    diag += "7 Galerie (Echt + $galleryMix % KI)" to m7
                 }
                 if (diag.isNotEmpty()) {
                     showStatus("Speichere Diagnosebild …")

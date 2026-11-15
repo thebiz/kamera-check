@@ -126,9 +126,16 @@ object SuperRes {
      * das übernimmt danach die KI). Liefert Mittelwert und Referenz-Einzelbild
      * in Ausschnittsgröße.
      */
+    /** Bilder, die weniger als diesen Anteil der Schärfe des besten Bildes haben, fliegen raus. */
+    const val SHARP_KEEP = 0.8f
+
+    /** Anzahl beim letzten Durchlauf aussortierter (unscharfer/verrutschter) Bilder */
+    @Volatile var dropped = 0
+
     fun process(
         frames: MutableList<Frame?>,
         r: Region,
+        frameWeights: FloatArray? = null,
         progress: (String) -> Unit,
     ): Result {
         val w = r.rw
@@ -153,7 +160,10 @@ object SuperRes {
         }
         val costs = shifts.map { it[2] }.sorted()
         val median = if (costs.isEmpty()) 0f else costs[costs.size / 2]
-        val good = shifts.filter { it[2] <= median * 1.6f + 1f }
+        // Nur Bilder, die fast so scharf sind wie das schärfste: ein unscharfes Bild im Mittel
+        // macht das Ergebnis weicher statt besser (Befund Diagnosebild 1.3)
+        val good = shifts.filter { it[2] <= median * 1.6f + 1f && sharp[it[3].toInt()] >= SHARP_KEEP * sharp[refIdx] }
+        dropped = total - 1 - good.size
 
         val u = 1
         val wo = r.cw
@@ -169,13 +179,17 @@ object SuperRes {
         val cWt = FloatArray(cwh * chh)
 
         progress("Verrechne 1/${good.size + 1} …")
-        splat(ref.y, 0f, 0f, ref.y, r, u, acc, wt, wo, ho)
+        splat(ref.y, Align.ShiftField.constant(w, h, 0f, 0f), 1f, ref.y, r, u, acc, wt, wo, ho)
         addChroma(ref, 0f, 0f, cwh, chh, uAcc, vAcc, cWt)
         good.forEachIndexed { k, s ->
             progress("Verrechne ${k + 2}/${good.size + 1} …")
             val idx = s[3].toInt()
             val f = frames[idx]!!
-            splat(f.y, s[0], s[1], ref.y, r, u, acc, wt, wo, ho)
+            // kachelweise ausrichten (Handdrehung), Gewicht nach Schärfe
+            val field = Align.localField(ref.y, f.y, w, h, s[0], s[1])
+            val q = sharp[idx] / sharp[refIdx]
+            val fw = (frameWeights?.getOrNull(idx) ?: 1f) * q * q * q * q
+            splat(f.y, field, fw, ref.y, r, u, acc, wt, wo, ho)
             addChroma(f, s[0], s[1], cwh, chh, uAcc, vAcc, cWt)
             frames[idx] = null
         }
@@ -234,58 +248,54 @@ object SuperRes {
     }
 
     private fun splat(
-        fy: ByteArray, dx: Float, dy: Float, refY: ByteArray,
+        fy: ByteArray, field: Align.ShiftField, fw: Float, refY: ByteArray,
         r: Region, u: Int, acc: FloatArray, wt: FloatArray, wo: Int, ho: Int,
     ) {
         val w = r.rw
         val h = r.rh
         val uf = u.toFloat()
+        val d = FloatArray(2)
         for (j in 0 until h) {
-            val ly = j + dy
-            if (ly < 0f || ly >= h - 1) continue
-            val oy = (r.y0 + ly - r.cy + 0.5f) * uf - 0.5f
-            if (oy <= -1f || oy >= ho) continue
-            val iy = floor(oy).toInt()
-            val fyw = oy - iy
-            val ry = ly.toInt()
-            val rfy = ly - ry
-            val rRow0 = ry * w
-            val rRow1 = rRow0 + w
             val row = j * w
-
-            var lx = dx
-            var ox = (r.x0 + dx - r.cx + 0.5f) * uf - 0.5f
             for (i in 0 until w) {
-                if (lx >= 0f && lx < w - 1 && ox > -1f && ox < wo) {
-                    val v = (fy[row + i].toInt() and 255).toFloat()
-                    val rx = lx.toInt()
-                    val rfx = lx - rx
-                    val p00 = (refY[rRow0 + rx].toInt() and 255).toFloat()
-                    val p10 = (refY[rRow0 + rx + 1].toInt() and 255).toFloat()
-                    val p01 = (refY[rRow1 + rx].toInt() and 255).toFloat()
-                    val p11 = (refY[rRow1 + rx + 1].toInt() and 255).toFloat()
-                    val pred = (p00 * (1 - rfx) + p10 * rfx) * (1 - rfy) + (p01 * (1 - rfx) + p11 * rfx) * rfy
-                    val rob = ROBUST[min(255, abs(v - pred).toInt())]
+                field.at(i.toFloat(), j.toFloat(), d)
+                val lx = i + d[0]
+                val ly = j + d[1]
+                if (lx < 0f || lx >= w - 1 || ly < 0f || ly >= h - 1) continue
+                val ox = (r.x0 + lx - r.cx + 0.5f) * uf - 0.5f
+                val oy = (r.y0 + ly - r.cy + 0.5f) * uf - 0.5f
+                if (ox <= -1f || ox >= wo || oy <= -1f || oy >= ho) continue
+                val v = (fy[row + i].toInt() and 255).toFloat()
+                val rx = lx.toInt()
+                val ry = ly.toInt()
+                val rfx = lx - rx
+                val rfy = ly - ry
+                val r0 = ry * w + rx
+                val p00 = (refY[r0].toInt() and 255).toFloat()
+                val p10 = (refY[r0 + 1].toInt() and 255).toFloat()
+                val p01 = (refY[r0 + w].toInt() and 255).toFloat()
+                val p11 = (refY[r0 + w + 1].toInt() and 255).toFloat()
+                val pred = (p00 * (1 - rfx) + p10 * rfx) * (1 - rfy) + (p01 * (1 - rfx) + p11 * rfx) * rfy
+                val rob = ROBUST[min(255, abs(v - pred).toInt())] * fw
 
-                    val ix = floor(ox).toInt()
-                    val fxw = ox - ix
-                    val w00 = (1 - fxw) * (1 - fyw) * rob
-                    val w10 = fxw * (1 - fyw) * rob
-                    val w01 = (1 - fxw) * fyw * rob
-                    val w11 = fxw * fyw * rob
-                    if (iy >= 0) {
-                        val b = iy * wo
-                        if (ix >= 0) { acc[b + ix] += w00 * v; wt[b + ix] += w00 }
-                        if (ix + 1 < wo) { acc[b + ix + 1] += w10 * v; wt[b + ix + 1] += w10 }
-                    }
-                    if (iy + 1 < ho) {
-                        val b = (iy + 1) * wo
-                        if (ix >= 0) { acc[b + ix] += w01 * v; wt[b + ix] += w01 }
-                        if (ix + 1 < wo) { acc[b + ix + 1] += w11 * v; wt[b + ix + 1] += w11 }
-                    }
+                val ix = floor(ox).toInt()
+                val iy = floor(oy).toInt()
+                val fxw = ox - ix
+                val fyw = oy - iy
+                val w00 = (1 - fxw) * (1 - fyw) * rob
+                val w10 = fxw * (1 - fyw) * rob
+                val w01 = (1 - fxw) * fyw * rob
+                val w11 = fxw * fyw * rob
+                if (iy >= 0) {
+                    val b = iy * wo
+                    if (ix >= 0) { acc[b + ix] += w00 * v; wt[b + ix] += w00 }
+                    if (ix + 1 < wo) { acc[b + ix + 1] += w10 * v; wt[b + ix + 1] += w10 }
                 }
-                lx += 1f
-                ox += uf
+                if (iy + 1 < ho) {
+                    val b = (iy + 1) * wo
+                    if (ix >= 0) { acc[b + ix] += w01 * v; wt[b + ix] += w01 }
+                    if (ix + 1 < wo) { acc[b + ix + 1] += w11 * v; wt[b + ix + 1] += w11 }
+                }
             }
         }
     }

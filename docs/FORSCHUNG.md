@@ -22,7 +22,7 @@ herausholen, statt es nur hübsch zu erfinden.
 
 ---
 
-## 2. Die Rechenkette (Version 1.3)
+## 2. Die Rechenkette (Version 1.4)
 
 Ein Druck auf den Auslöser löst diese Schritte aus:
 
@@ -212,6 +212,32 @@ nicht mitmacht. Unter *Mehr › Quelle* lässt sich der alte Weg wieder einschal
 können beide Diagnosebilder direkt verglichen werden. Ob die Hintertür wirklich mehr
 Detail liefert, zeigt erst das nächste Diagnosebild (Kachel 2 gegen Kachel 1).
 
+**Zweites Diagnosebild (Version 1.3, Quelle Kamera-Zoom):** ![Diagnose 1.3](diagnose_v1-3.jpg)
+
+| Schritt | Befund |
+|---|---|
+| 2 Kamera-Einzelbild | **deutlich näher an der Vorschau** als in 1.2.1 – die Hintertür geht ein Stück auf (818 × 614 statt ≈ 410 × 310 Pixel bei 10×) |
+| 3 gemittelt (16 Bilder) | **weicher als das Einzelbild** – das Übereinanderlegen ist nicht genau genug |
+| 6 KI | macht aus kleiner Schrift gleichmäßige Striche |
+
+**Ursachen und Version 1.4:**
+- Das YUV-Mitteln richtete jedes Bild nur *als Ganzes* aus (eine Verschiebung, gemessen in der
+  Bildmitte). Bei 10× dreht schon eine winzige Handdrehung die Ränder um mehrere Pixel weg.
+  Neu: **kachelweises Ausrichten in zwei Stufen** (grob auf Viertel-Auflösung bis ±12 px,
+  dann fein in voller Auflösung, Ausreißer durch Nachbarn ersetzt).
+  Simulation (`tools/sim/AlignTest.kt`, Restfehler der Ausrichtung):
+
+  | Bewegung zwischen zwei Bildern | nur global | kachelweise |
+  |---|---|---|
+  | nur Verschiebung | 0,11 px | 0,11 px |
+  | Drehung 0,4° | 2,24 px | 0,24 px |
+  | Drehung 0,8° + Zoom 0,3 % | 4,66 px | 0,49 px |
+
+- Unscharfe Bilder (Verwacklung, Fokusatmen) zogen das Mittel herunter. Neu: nur Bilder mit
+  mindestens 80 % der Schärfe des besten zählen, gewichtet mit (Schärfe-Anteil)⁴ und dem Lagesensor.
+- **KI bei erkannter Schrift aus**: Die Galerie bekommt dann das reine physikalische Ergebnis;
+  der KI-Regler im Viewer bleibt zum Ausprobieren.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -226,6 +252,7 @@ Detail liefert, zeigt erst das nächste Diagnosebild (Kachel 2 gegen Kachel 1).
 | **Simulation ersetzt nicht das echte Foto** – Grafiker-Augen finden, was Zahlen übersehen | daraus: Version 1.0 setzt auf Physik statt Raten |
 | Bei ebenem Motiv muss alles gleich scharf sein; Ungleichmäßigkeit = Rechenfehler | Johns Hinweis; jetzt automatische Prüfung |
 | Die eigene Messmethode hatte einen festen Fehler (+0,5 px²) – sichtbar erst mit bekannten Testkanten | Kalibrier-Simulation, Version 1.1 |
+| Mitteln hilft nur, wenn die Bilder auf Bruchteile eines Pixels übereinanderliegen – sonst wird es weicher als ein Einzelbild | Diagnosebild 1.3 (Kachel 3 weicher als Kachel 2) |
 | Das Rohmaterial entscheidet: Eine gute Rechenkette auf zusammengefassten 12-MP-Pixeln verliert gegen die einfache Vorschau aus der hochauflösenden Bildmitte | Diagnosebild, Version 1.2.1 |
 | Die Handy-Vorschau ist ein starker Gegner: Bildprozessor schärft und mittelt bereits – unsere Kette muss sich daran messen, Schritt für Schritt | Johns Screenshot-Vergleich, Version 1.2 |
 | Eine Erkennung, die nur den Idealfall kennt, scheitert in der Hand (Schräglage, Ausbrennen) | Johns 4 Fehlversuche mit den Graustufen; Version 1.2 |
@@ -260,6 +287,7 @@ Detail liefert, zeigt erst das nächste Diagnosebild (Kachel 2 gegen Kachel 1).
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.4 | Kachelweises Ausrichten der Bildserie (zweistufig), unscharfe Bilder aussortiert, KI bei Schrift aus |
 | 1.3 | Quelle Kamera-Zoom: Bildprozessor zoomt bis 2× (hochauflösende Bildmitte), Rest rechnet die App; umschaltbar |
 | 1.2.1 | Diagnosebild aller Rechenschritte; Kalibrierung ansehen; Fehler „Knöpfe weg“ nach dem Kalibrieren behoben |
 | 1.2 | Kalibrierung überarbeitet: Anweisungen unten, robuste Graustufen-Erkennung (schräg, Perspektive, ausgebrannt), überspringbar, schneller (nur Rahmen, 12 Bilder), Belichtung −1 Blende |
