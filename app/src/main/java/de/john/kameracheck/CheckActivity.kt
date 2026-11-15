@@ -18,12 +18,64 @@ import kotlin.math.sqrt
 
 class CheckActivity : Activity() {
 
+    /**
+     * Große Testbilder dieser App selbst finden (eigene Dateien darf sie ohne Erlaubnis lesen) –
+     * kein Suchen in der Fotoauswahl nötig. Mehrere → kurze Liste mit Namen, keins → Fotoauswahl.
+     */
+    private fun chooseForCheck() {
+        val found = ArrayList<Pair<String, android.net.Uri>>()
+        try {
+            val col = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            contentResolver.query(
+                col,
+                arrayOf(android.provider.MediaStore.Images.Media._ID, android.provider.MediaStore.Images.Media.DISPLAY_NAME,
+                    android.provider.MediaStore.Images.Media.WIDTH, android.provider.MediaStore.Images.Media.HEIGHT),
+                "${android.provider.MediaStore.Images.Media.DISPLAY_NAME} LIKE ?", arrayOf("test50mp_%"),
+                "${android.provider.MediaStore.Images.Media.DATE_ADDED} DESC",
+            )?.use { c ->
+                while (c.moveToNext() && found.size < 12) {
+                    val name = c.getString(1) ?: continue
+                    val w = c.getInt(2)
+                    val h = c.getInt(3)
+                    // 50-MP-Bilder: über die Größe oder (falls noch nicht eingetragen) über den Namen
+                    if (w.toLong() * h > 30_000_000L || (w == 0 && name.contains("_sr_"))) {
+                        found += "$name  (${if (w > 0) "$w × $h" else "Größe ?"})" to android.content.ContentUris.withAppendedId(col, c.getLong(0))
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        when {
+            found.size == 1 -> checkPhoto(found[0].second)
+            found.size > 1 -> android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Welches 50-MP-Bild prüfen?")
+                .setItems(found.map { it.first }.toTypedArray()) { _, i -> checkPhoto(found[i].second) }
+                .setNegativeButton("Anderes Foto wählen …") { _, _ -> pickForCheck() }
+                .show()
+            else -> {
+                detailOut.text = "Kein 50-MP-Testbild dieser App gefunden – bitte ein Foto auswählen."
+                pickForCheck()
+            }
+        }
+    }
+
+    private fun pickForCheck() {
+        val pick = Intent(android.provider.MediaStore.ACTION_PICK_IMAGES)
+        val i = if (pick.resolveActivity(packageManager) != null) pick else Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*" }
+        @Suppress("DEPRECATION")
+        startActivityForResult(i, 11)
+    }
+
     @Deprecated("Activity-Result-API")
     override fun onActivityResult(code: Int, result: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(code, result, data)
         val uri = data?.data ?: data?.clipData?.getItemAt(0)?.uri
         if (code != 11 || result != RESULT_OK || uri == null) return
+        checkPhoto(uri)
+    }
+
+    private fun checkPhoto(uri: android.net.Uri) {
         detailOut.text = "Prüfe … (dauert einige Sekunden)"
         Thread {
             try {
@@ -130,12 +182,7 @@ class CheckActivity : Activity() {
         root.addView(Button(this).apply {
             text = "Foto prüfen: echte 50 MP?"
             isAllCaps = false
-            setOnClickListener {
-                val pick = Intent(android.provider.MediaStore.ACTION_PICK_IMAGES)
-                val i = if (pick.resolveActivity(packageManager) != null) pick else Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*" }
-                @Suppress("DEPRECATION")
-                startActivityForResult(i, 11)
-            }
+            setOnClickListener { chooseForCheck() }
         })
         detailOut = TextView(this).apply {
             textSize = 12.5f
