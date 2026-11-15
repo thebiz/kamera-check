@@ -624,6 +624,13 @@ zurückholen. (2) Sicherung in der KI: Rauschen nie unter 0,6/255 je Pixel Unsch
 Lehre: **Bei Tiefe im Bild gibt es nicht „die eine“ Unschärfe.** Langfristig: Unschärfe je Bildstelle
 aus Messung und Tiefenkarte.
 
+**Johns Test der Plastizität (15.11.2026, abends, Version 1.17.1):** Die weißen Säume in der Schuh-Szene
+sind mit 1.17.1 behoben. Aber: Der Dunst ließ den Hintergrund blass und unrealistisch wirken – „Dunst in
+der Wohnung bei drei Metern?“ Richtig: Luftperspektive entsteht erst über Kilometer. **Version 1.17.2:**
+Dunst entfernt, Plastizität nur noch über die Schärfe (nah knackiger, fern weicher). 3D-Ansicht
+bildschirmfüllend mit Zwei-Finger-Zoom, Verschieben, Doppeltippen und Regler „3D-Stärke“. Im Viewer
+liegen Klarheit und Tiefe hinter dem Knopf „Klarheit & Tiefe“, damit das Bild groß bleibt.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -676,6 +683,7 @@ aus Messung und Tiefenkarte.
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.17.2 | Plastizität ohne Dunst, 3D bildschirmfüllend mit Zoom und Stärke-Regler, Regler zusammengeklappt |
 | 1.17.1 | Bei Tiefe im Bild für die schärfste Stelle schärfen; Rausch-Sicherung bei großer Unschärfe |
 | 1.17 | Plastizität nach Tiefenkarte (MiDaS), 3D-Wackeln, Griff der Vergleichslinie unten; 1.16.1 gesichert |
 | 1.16.1 | Klarheit ohne glatten hellen Streifen an Kanten (weich gedeckelt, aufhellen enger), Start 20 % |

@@ -90,6 +90,11 @@ class ViewerActivity : Activity() {
         }
         panel.addView(seek, LinearLayout.LayoutParams(-1, -2))
 
+        // Weitere Regler hinter einem Knopf, damit das Bild groß bleibt (Johns Wunsch)
+        val extra = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
         clarityWanted = try {
             getSharedPreferences("viewer", MODE_PRIVATE).getFloat("clarity", DEFAULT_CLARITY)
         } catch (_: Throwable) { DEFAULT_CLARITY }
@@ -99,8 +104,8 @@ class ViewerActivity : Activity() {
             setPadding(0, dp(8f), 0, 0)
         }
         showClarity(clarityWanted, false)
-        panel.addView(clarityLabel)
-        panel.addView(BigSlider(this).apply {
+        extra.addView(clarityLabel)
+        extra.addView(BigSlider(this).apply {
             setValue(clarityWanted)
             onChange = { v ->
                 showClarity(v, true)
@@ -118,8 +123,8 @@ class ViewerActivity : Activity() {
             setPadding(0, dp(8f), 0, 0)
         }
         showPlastic(plasticWanted, false)
-        panel.addView(plasticLabel)
-        panel.addView(BigSlider(this).apply {
+        extra.addView(plasticLabel)
+        extra.addView(BigSlider(this).apply {
             setValue(plasticWanted)
             onChange = { v ->
                 showPlastic(v, true)
@@ -127,12 +132,22 @@ class ViewerActivity : Activity() {
                 synchronized(clarityLock) { plasticWanted = v; clarityLock.notifyAll() }
             }
         }, LinearLayout.LayoutParams(-1, -2))
-        // Schnellvergleich an derselben Stelle: Echt ⇄ KI (Johns Wunsch)
-        panel.addView(button("Echt ⇄ KI umschalten", false) {
+        // Schnellvergleich an derselben Stelle: Echt ⇄ KI (Johns Wunsch) · daneben: weitere Regler auf/zu
+        val quick = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        quick.addView(button("Echt ⇄ KI", false) {
             val v = if (compare.mix >= 0.5f) 0f else 1f
             seek.setValue(v)
             setMix(v)
-        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8f) })
+        }, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(4f) })
+        lateinit var toggle: TextView
+        toggle = button("Klarheit & Tiefe ▾", false) {
+            val open = extra.visibility != View.VISIBLE
+            extra.visibility = if (open) View.VISIBLE else View.GONE
+            toggle.text = if (open) "Klarheit & Tiefe ▴" else "Klarheit & Tiefe ▾"
+        }
+        quick.addView(toggle, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(4f) })
+        panel.addView(quick, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8f) })
+        panel.addView(extra, LinearLayout.LayoutParams(-1, -2))
 
         // Johns Wünsche: fertiges Foto direkt in der Galerie öffnen, Diagnosebild direkt teilen
         val links = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -163,13 +178,6 @@ class ViewerActivity : Activity() {
         row.addView(saveBtn, LinearLayout.LayoutParams(0, -2, 1.4f).apply { leftMargin = dp(6f) })
         panel.addView(row, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10f) })
 
-        val hint = TextView(this).apply {
-            text = "Linie ziehen: vergleichen · Zwei Finger: zoomen · Doppeltippen: 3×"
-            setTextColor(MUTED)
-            textSize = 12f
-            gravity = Gravity.CENTER
-        }
-        panel.addView(hint, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10f) })
 
         root.addView(panel)
         setContentView(root)
@@ -253,7 +261,8 @@ class ViewerActivity : Activity() {
             gravity = Gravity.CENTER
             setBackgroundColor(0xCC000000.toInt())
         }
-        stage.addView(hint, FrameLayout.LayoutParams(-1, -1))
+        val full = findViewById<FrameLayout>(android.R.id.content)
+        full.addView(hint, FrameLayout.LayoutParams(-1, -1))
         Thread {
             try {
                 val img = compare.renderMix()
@@ -262,26 +271,47 @@ class ViewerActivity : Activity() {
                 pv.setImage(img, d)
                 img.recycle()
                 runOnUiThread {
-                    stage.removeView(hint)
+                    full.removeView(hint)
+                    // bildschirmfüllend, mit Zoom und Regler für die Stärke (Johns Wunsch)
                     val box = FrameLayout(this).apply { setBackgroundColor(BG) }
                     box.addView(pv, FrameLayout.LayoutParams(-1, -1))
-                    box.addView(button("3D schließen", true) { close3d() }, FrameLayout.LayoutParams(-2, -2,
-                        Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(16f) })
                     box.addView(TextView(this).apply {
-                        text = "Bewegt sich von selbst · Finger ziehen: selbst steuern"
+                        text = "Zwei Finger: zoomen · ein Finger: verschieben · Doppeltippen: 3×"
                         setTextColor(FG)
                         textSize = 12f
                         setPadding(dp(10f), dp(6f), dp(10f), dp(6f))
                         setBackgroundColor(0x99000000.toInt())
-                    }, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(12f) })
-                    stage.addView(box, FrameLayout.LayoutParams(-1, -1))
+                    }, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(40f) })
+                    val bottom = LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(dp(20f), dp(10f), dp(20f), dp(16f))
+                        setBackgroundColor(0xAA000000.toInt())
+                    }
+                    val sLabel = TextView(this).apply { setTextColor(FG); textSize = 14f }
+                    val st0 = try { getSharedPreferences("viewer", MODE_PRIVATE).getFloat("strength3d", 0.4f) } catch (_: Throwable) { 0.4f }
+                    fun setStrength(v: Float) {
+                        pv.strength = 0.005f + v * 0.075f
+                        sLabel.text = "3D-Stärke: ${(v * 100).roundToInt()} %"
+                    }
+                    setStrength(st0)
+                    bottom.addView(sLabel)
+                    bottom.addView(BigSlider(this).apply {
+                        setValue(st0)
+                        onChange = { v ->
+                            setStrength(v)
+                            getSharedPreferences("viewer", MODE_PRIVATE).edit().putFloat("strength3d", v).apply()
+                        }
+                    }, LinearLayout.LayoutParams(-1, -2))
+                    bottom.addView(button("3D schließen", true) { close3d() }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8f) })
+                    box.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+                    full.addView(box, FrameLayout.LayoutParams(-1, -1))
                     parallax = pv
                     pv.tag = box
                 }
             } catch (e: Throwable) {
                 runOnUiThread {
                     hint.text = "3D nicht möglich (${e.message})"
-                    hint.postDelayed({ stage.removeView(hint) }, 2500)
+                    hint.postDelayed({ full.removeView(hint) }, 2500)
                 }
             }
         }.start()
@@ -289,7 +319,7 @@ class ViewerActivity : Activity() {
 
     private fun close3d() {
         val pv = parallax ?: return
-        stage.removeView(pv.tag as View)
+        findViewById<FrameLayout>(android.R.id.content).removeView(pv.tag as View)
         pv.release()
         parallax = null
     }
