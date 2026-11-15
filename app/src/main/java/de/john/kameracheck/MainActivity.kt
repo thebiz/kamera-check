@@ -222,6 +222,13 @@ class MainActivity : Activity() {
             }
         }
         if (strongOn) preloadStrong()
+        handleImportIntent(intent)
+    }
+
+    override fun onNewIntent(i: Intent) {
+        super.onNewIntent(i)
+        setIntent(i)
+        handleImportIntent(i)
     }
 
     override fun onDestroy() {
@@ -397,6 +404,8 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
+        // 50 MP: Fotos mit der Xiaomi-Kamera machen, die App holt sie sich danach automatisch
+        chips2.addView(chip("50 MP") { askXiaomi() }, chipParams())
         lupeChip = chip("KI-Lupe") { toggleLupe() }
         chips2.addView(lupeChip, chipParams())
         macroChip = chip("Makro") { toggleMacro() }
@@ -704,6 +713,7 @@ class MainActivity : Activity() {
             return
         }
         startWhenReady()
+        checkXiaomiReturn()
     }
 
     override fun onPause() {
@@ -716,6 +726,11 @@ class MainActivity : Activity() {
     }
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
+        if (code == REQ_PHOTOS) {
+            if (photoAccess() != PhotoAccess.NONE) launchXiaomi()
+            else showStatus("Ohne Foto-Zugriff kann die App die 50-MP-Fotos nicht holen – Mehr › Fotos importieren geht trotzdem")
+            return
+        }
         if (results.isNotEmpty() && results[0] == PackageManager.PERMISSION_GRANTED) startWhenReady()
         else showStatus("Ohne Kamera-Erlaubnis geht's leider nicht")
     }
@@ -1529,7 +1544,7 @@ class MainActivity : Activity() {
                 val (sharp, decIters) = deblurBitmap(real, sx, sy, if (strongOn) 150 else 80, if (strongOn) 60_000L else 25_000L, sigmaMap) { pct ->
                     showStatus("Entschärfe … $pct %")
                 }
-                info += "Entschärft: $decIters Durchgänge (Richardson-Lucy mit Kantenschutz)"
+                info += "Entschärft: $decIters Durchgänge (Richardson-Lucy mit Kantenschutz, starke Kanten gebremst)"
                 keep("5 entschärft (Echt)", sharp)
                 if (sharp !== real) real.recycle()
                 val decSecs = (SystemClock.elapsedRealtime() - tDec) / 100 / 10f
@@ -1728,7 +1743,9 @@ class MainActivity : Activity() {
             val p = px[i]
             (((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f) / 255f
         }
-        val (yd, n) = Deconv.deconvolve(y, w, h, sx, sy, iters, 0.012f, 4, budgetMs, { pct -> progress(pct) }, sigmaAt)
+        val (yd0, n) = Deconv.deconvolve(y, w, h, sx, sy, iters, 0.012f, 4, budgetMs, { pct -> progress(pct) }, sigmaAt)
+        // starke Kanten bremsen, kein Überschwingen – damit alles gleichmäßig geschärft wirkt
+        val yd = Deconv.tame(y, yd0, w, h)
         for (i in px.indices) {
             val d = (yd[i] - y[i]) * 255f
             val p = px[i]
@@ -1837,7 +1854,8 @@ class MainActivity : Activity() {
         if (profile != null) m.menu.add(0, 2, 2, "Kalibrierung löschen")
         m.menu.add(0, 5, 3, if (diagOn) "Diagnosebild: an ✓" else "Diagnosebild: aus")
         m.menu.add(0, 6, 4, if (ispZoomOn) "Quelle: Kamera-Zoom ✓" else "Quelle: ganzes Sensorbild + RAW")
-        m.menu.add(0, 3, 5, "Kamera-Check")
+        m.menu.add(0, 7, 5, "Fotos importieren …")
+        m.menu.add(0, 3, 6, "Kamera-Check")
         m.setOnMenuItemClickListener {
             when (it.itemId) {
                 1 -> startCalibration()
@@ -1849,6 +1867,7 @@ class MainActivity : Activity() {
                 }
                 3 -> startActivity(Intent(this, CheckActivity::class.java))
                 4 -> profile?.let { p -> showProfile(p, "Schärfeprofil", "Wird bei jedem Foto ab 2× genutzt.") }
+                7 -> pickPhotos()
                 6 -> {
                     ispZoomOn = !ispZoomOn
                     getPreferences(MODE_PRIVATE).edit().putBoolean("ispzoom", ispZoomOn).apply()
@@ -2140,6 +2159,320 @@ class MainActivity : Activity() {
         File(cacheDir, name).outputStream().use { b.compress(Bitmap.CompressFormat.JPEG, 95, it) }
     }
 
+    // ───────────────────────── 50 MP über die Xiaomi-Kamera ─────────────────────────
+
+    private enum class PhotoAccess { NONE, PARTIAL, FULL }
+
+    private fun photoAccess(): PhotoAccess {
+        val granted = { p: String -> checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED }
+        return when {
+            android.os.Build.VERSION.SDK_INT >= 33 && granted(Manifest.permission.READ_MEDIA_IMAGES) -> PhotoAccess.FULL
+            android.os.Build.VERSION.SDK_INT < 33 && granted(Manifest.permission.READ_EXTERNAL_STORAGE) -> PhotoAccess.FULL
+            android.os.Build.VERSION.SDK_INT >= 34 && granted("android.permission.READ_MEDIA_VISUAL_USER_SELECTED") -> PhotoAccess.PARTIAL
+            else -> PhotoAccess.NONE
+        }
+    }
+
+    private fun askXiaomi() {
+        if (busy) return
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("50 MP mit der Xiaomi-Kamera")
+            .setMessage("Die volle Auflösung gibt Xiaomi nur der eigenen Kamera-App frei. Deshalb:\n\n" +
+                "1. In der Kamera-App oben auf „50 MP“ (bzw. „50M“) stellen.\n" +
+                "2. 1 bis 8 Fotos vom selben Motiv machen, möglichst ruhig – mehrere werden übereinandergelegt.\n" +
+                "3. Mit „Zurück“ hierher kommen: Die App holt die neuen Fotos automatisch.")
+            .setPositiveButton("Kamera öffnen") { _, _ -> launchXiaomi() }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun launchXiaomi() {
+        if (photoAccess() == PhotoAccess.NONE) {
+            val p = if (android.os.Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+            requestPermissions(arrayOf(p), REQ_PHOTOS)
+            return
+        }
+        getPreferences(MODE_PRIVATE).edit().putLong("xiaomiSince", System.currentTimeMillis() / 1000 - 2).apply()
+        try {
+            startActivity(Intent(android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))
+        } catch (_: Exception) {
+            getPreferences(MODE_PRIVATE).edit().remove("xiaomiSince").apply()
+            showStatus("Kamera-App nicht gefunden")
+        }
+    }
+
+    /** Zurück aus der Xiaomi-Kamera: neue Fotos seit dem Start suchen und zum Ausschnitt-Wählen schicken. */
+    private fun checkXiaomiReturn() {
+        val prefs = getPreferences(MODE_PRIVATE)
+        val since = prefs.getLong("xiaomiSince", 0L)
+        if (since <= 0L) return
+        prefs.edit().remove("xiaomiSince").apply()
+        Thread {
+            val uris = ArrayList<android.net.Uri>()
+            try {
+                val col = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                contentResolver.query(
+                    col, arrayOf(android.provider.MediaStore.Images.Media._ID),
+                    "${android.provider.MediaStore.Images.Media.DATE_ADDED} >= ?", arrayOf(since.toString()),
+                    "${android.provider.MediaStore.Images.Media.DATE_ADDED} DESC",
+                )?.use { c ->
+                    while (c.moveToNext() && uris.size < ImportActivity.MAX_PHOTOS) {
+                        uris += android.content.ContentUris.withAppendedId(col, c.getLong(0))
+                    }
+                }
+            } catch (_: Exception) {
+            }
+            // eigene Ergebnisse (zoom_, diagnose_) nicht mitnehmen: nur Fotos, die nach dem Start entstanden,
+            // und die App speichert in der Zwischenzeit nichts
+            uris.reverse()
+            runOnUiThread {
+                if (uris.isEmpty()) {
+                    showStatus(if (photoAccess() == PhotoAccess.PARTIAL)
+                        "Kein Zugriff auf neue Fotos – in den Einstellungen „Alle Fotos erlauben“ oder Mehr › Fotos importieren"
+                    else "Kein neues Foto gefunden – oder über Mehr › Fotos importieren wählen")
+                    status.postDelayed({ if (!busy) showStatus(null) }, 5000)
+                } else openImport(uris)
+            }
+        }.start()
+    }
+
+    private fun pickPhotos() {
+        val pick = Intent(android.provider.MediaStore.ACTION_PICK_IMAGES).apply {
+            putExtra(android.provider.MediaStore.EXTRA_PICK_IMAGES_MAX, ImportActivity.MAX_PHOTOS)
+        }
+        val intent = if (pick.resolveActivity(packageManager) != null) pick else
+            Intent(Intent.ACTION_GET_CONTENT).apply {
+                type = "image/*"
+                putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            }
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, REQ_PICK)
+        } catch (_: Exception) {
+            showStatus("Fotoauswahl nicht verfügbar")
+        }
+    }
+
+    @Deprecated("Activity-Result-API")
+    override fun onActivityResult(code: Int, result: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(code, result, data)
+        if (code != REQ_PICK || result != RESULT_OK || data == null) return
+        val uris = ArrayList<android.net.Uri>()
+        data.clipData?.let { c -> for (k in 0 until c.itemCount) c.getItemAt(k).uri?.let { uris += it } }
+        if (uris.isEmpty()) data.data?.let { uris += it }
+        if (uris.isNotEmpty()) openImport(uris)
+    }
+
+    private fun openImport(uris: List<android.net.Uri>) {
+        val i = Intent(this, ImportActivity::class.java).apply {
+            putParcelableArrayListExtra(EXTRA_URIS, ArrayList(uris))
+            val clip = android.content.ClipData.newRawUri("fotos", uris[0])
+            for (u in uris.drop(1)) clip.addItem(android.content.ClipData.Item(u))
+            clipData = clip
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(i)
+    }
+
+    private fun handleImportIntent(i: Intent?) {
+        if (i?.action != ACTION_IMPORT) return
+        i.action = null // nicht nochmal bei Drehung/Neustart
+        @Suppress("DEPRECATION")
+        val uris = i.getParcelableArrayListExtra<android.net.Uri>(EXTRA_URIS) ?: return
+        val rect = i.getFloatArrayExtra(EXTRA_RECT) ?: return
+        val z = i.getFloatExtra(EXTRA_ZOOM, 4f)
+        if (busy) {
+            showStatus("Noch beschäftigt – bitte gleich nochmal")
+            return
+        }
+        busy = true
+        shutter.mode = ShutterView.Mode.PROCESSING
+        aiWorker.execute { runImport(uris, rect, z) }
+    }
+
+    /** Importierte Fotos: Ausschnitt lesen, übereinanderlegen, entschärfen, KI, Diagnosebild. */
+    private fun runImport(uris: List<android.net.Uri>, rect: FloatArray, z: Float) {
+        try {
+            val info = ArrayList<String>()
+            showStatus("Lese Fotos …")
+            val dims = PhotoIo.info(this, uris[0]) ?: throw IllegalStateException("Foto lässt sich nicht öffnen")
+            val margin = 96
+            val frames = ArrayList<Frame?>()
+            var region: Region? = null
+            var cropW = 0
+            var cropH = 0
+            for ((k, u) in uris.withIndex()) {
+                showStatus("Lese Foto ${k + 1}/${uris.size} …")
+                val d = PhotoIo.info(this, u) ?: continue
+                if (d.uprightW != dims.uprightW || d.uprightH != dims.uprightH) continue // andere Auflösung
+                val (bmp, inner) = PhotoIo.crop(this, u, rect, margin) ?: continue
+                if (region == null) {
+                    cropW = bmp.width
+                    cropH = bmp.height
+                    // so viele Fotos, wie in den Speicher passen
+                    val maxN = (YUV_BUDGET / (cropW.toLong() * cropH * 3 / 2)).toInt().coerceIn(1, ImportActivity.MAX_PHOTOS)
+                    if (frames.size >= maxN) { bmp.recycle(); break }
+                    region = Region(cropW, cropH, 0, 0, cropW, cropH,
+                        inner.left / 2 * 2, inner.top / 2 * 2, (inner.width() / 2 * 2).coerceAtMost(cropW), (inner.height() / 2 * 2).coerceAtMost(cropH))
+                }
+                if (bmp.width != cropW || bmp.height != cropH) { bmp.recycle(); continue }
+                frames += argbToFrame(bmp)
+                bmp.recycle()
+                val maxN = (YUV_BUDGET / (cropW.toLong() * cropH * 3 / 2)).toInt().coerceIn(1, ImportActivity.MAX_PHOTOS)
+                if (frames.size >= maxN) break
+            }
+            val r = region ?: throw IllegalStateException("Ausschnitt lässt sich nicht lesen")
+            val mpx = dims.uprightW.toLong() * dims.uprightH / 1e6
+            info += "Import Xiaomi-Kamera: ${frames.size} Foto${if (frames.size == 1) "" else "s"} · " +
+                "${dims.uprightW}×${dims.uprightH} (${"%.0f".format(mpx)} MP) · Ausschnitt ${fmt(z)}× = ${r.cw}×${r.ch} px"
+            if (mpx < 30) info += "Achtung: Foto hat nur ${"%.0f".format(mpx)} MP – in der Kamera-App auf 50 MP stellen"
+
+            // 1. übereinanderlegen (kachelweise ausgerichtet, unscharfe aussortiert)
+            val res = SuperRes.process(frames, r, null) { showStatus(it) }
+            info += if (res.total > 1) "${res.used} von ${res.total} Fotos verrechnet" +
+                (if (SuperRes.dropped > 0) " (${SuperRes.dropped} unscharf/verrutscht aussortiert)" else "")
+            else "Einzelfoto (mit mehreren Fotos wird es ruhiger und schärfer)"
+
+            // Diagnose: Ausschnitt 1:1 in der Bildmitte
+            val diag = ArrayList<Pair<String, Bitmap>>()
+            val fx = min(1f, DIAG_TILE.toFloat() / res.single.width)
+            val fy = min(1f, DIAG_TILE.toFloat() / res.single.height)
+            val dr = floatArrayOf(0.5f - fx / 2, 0.5f - fy / 2, 0.5f + fx / 2, 0.5f + fy / 2)
+            fun keep(name: String, b: Bitmap) {
+                if (diagOn) try { diag += name to diagCrop(b, dr, 0) } catch (_: Throwable) {}
+            }
+            keep("1 Xiaomi-Foto (Original, ${"%.0f".format(mpx)} MP)", res.single)
+            if (diagOn) {
+                val half = Bitmap.createScaledBitmap(res.single, res.single.width / 2, res.single.height / 2, true)
+                keep("2 zum Vergleich: wie 12 MP", half)
+                half.recycle()
+            }
+            if (res.used > 1) keep("3 ${res.used} Fotos übereinander", res.merged)
+
+            // 2. Unschärfe messen und physikalisch entschärfen (gebremst)
+            showStatus("Messe Unschärfe …")
+            val (blur, uniformity) = measureBlur(res.merged, 0)
+            info += uniformity
+            val sx = blur.sx.coerceIn(0.5f, 2.5f)
+            val sy = blur.sy.coerceIn(0.5f, 2.5f)
+            info += "Unschärfe gemessen ${fmt(blur.sx)}/${fmt(blur.sy)} px" + (if (blur.fromText) " (an Schrift)" else "") +
+                (if (sx != blur.sx || sy != blur.sy) " → begrenzt auf ${fmt(sx)}/${fmt(sy)} px" else "")
+            val (sharp, decIters) = deblurBitmap(res.merged, sx, sy, if (strongOn) 150 else 80, if (strongOn) 60_000L else 25_000L, null) { pct ->
+                showStatus("Entschärfe … $pct %")
+            }
+            info += "Entschärft: $decIters Durchgänge (Richardson-Lucy, starke Kanten gebremst)"
+            keep("4 entschärft (gebremst)", sharp)
+
+            // 3. KI (Schrift erkannt → nicht in die Galerie)
+            val model = if (strongOn) AiUpscaler.getStrong(this) { showStatus(it) } else ai!!
+            val budget = if (strongOn) 180_000L else 45_000L
+            val maxTiles = max(if (strongOn) 4L else 40L, budget / max(1L, model.msPerTile)).toInt()
+            var sc = min(1f, 2048f / max(sharp.width, sharp.height))
+            while (sc > 0.1f && model.tilesFor((sharp.width * sc).toInt(), (sharp.height * sc).toInt()) > maxTiles) sc *= 0.9f
+            val iw = max(16, (sharp.width * sc).roundToInt())
+            val ih = max(16, (sharp.height * sc).roundToInt())
+            val input = if (iw != sharp.width || ih != sharp.height) Bitmap.createScaledBitmap(sharp, iw, ih, true) else sharp
+            val t0 = SystemClock.elapsedRealtime()
+            val kiRaw = model.upscale(input, true) { done, total -> showStatus("KI … ${done * 100 / total} %") }
+            if (input !== sharp) input.recycle()
+            info += "KI ${if (strongOn) "stark" else "schnell"} (${model.backend}): ${fmt((SystemClock.elapsedRealtime() - t0) / 1000f)} s"
+
+            // Ausgabegröße: Ausschnitt ×2, lange Seite höchstens 4096
+            val fit = min(2f, 4096f / max(sharp.width, sharp.height))
+            val kw = max(1, (sharp.width * fit).roundToInt())
+            val kh = max(1, (sharp.height * fit).roundToInt())
+            val kiBmp = if (kiRaw.width != kw || kiRaw.height != kh)
+                Bitmap.createScaledBitmap(kiRaw, kw, kh, true).also { if (it !== kiRaw) kiRaw.recycle() } else kiRaw
+            keep("5 KI pur", kiBmp)
+            val galleryMix = if (blur.fromText) 0 else ViewerActivity.DEFAULT_MIX
+            ViewerActivity.startMix = galleryMix
+            if (galleryMix == 0) info += "Schrift erkannt → Galerie ohne KI (Regler im Viewer bleibt)"
+
+            showStatus("Speichere …")
+            val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
+            val n = Bitmap.createScaledBitmap(res.single, kw, kh, true)
+            cacheJpeg(n, ViewerActivity.NORMAL)
+            n.recycle()
+            res.single.recycle()
+            res.merged.recycle()
+            val sBmp = Bitmap.createScaledBitmap(sharp, kw, kh, true)
+            if (sBmp !== sharp) sharp.recycle()
+            cacheJpeg(sBmp, ViewerActivity.REAL)
+            cacheJpeg(kiBmp, ViewerActivity.KI)
+            val mix = Bitmap.createBitmap(kw, kh, Bitmap.Config.ARGB_8888)
+            android.graphics.Canvas(mix).apply {
+                drawBitmap(sBmp, 0f, 0f, null)
+                drawBitmap(kiBmp, 0f, 0f, android.graphics.Paint().apply { alpha = galleryMix * 255 / 100 })
+            }
+            sBmp.recycle()
+            kiBmp.recycle()
+            ViewerActivity.saveToGallery(this, mix, "import_${stamp}_${fmt(z).replace(',', '-')}x")
+            val t4 = diag.firstOrNull { it.first.startsWith("4") }?.second
+            val t5 = diag.firstOrNull { it.first.startsWith("5") }?.second
+            if (t4 != null && t5 != null) {
+                val m6 = t4.copy(Bitmap.Config.ARGB_8888, true)
+                android.graphics.Canvas(m6).drawBitmap(Bitmap.createScaledBitmap(t5, m6.width, m6.height, true), 0f, 0f,
+                    android.graphics.Paint().apply { alpha = galleryMix * 255 / 100 })
+                diag += "6 Galerie (Echt + $galleryMix % KI)" to m6
+            }
+            if (diag.isNotEmpty()) {
+                val sheet = diagSheet(diag, info)
+                ViewerActivity.saveToGallery(this, sheet, "diagnose_import_${stamp}")
+                sheet.recycle()
+            }
+            val small = Bitmap.createScaledBitmap(mix, dp(54f) * 2, dp(54f) * 2 * mix.height / mix.width, true)
+            mix.recycle()
+            File(cacheDir, ViewerActivity.INFO).writeText(info.joinToString("\n"))
+            showStatus("Fertig ✓")
+            runOnUiThread {
+                thumb.setImageBitmap(small)
+                thumb.visibility = View.VISIBLE
+                startActivity(Intent(this, ViewerActivity::class.java))
+            }
+        } catch (e: OutOfMemoryError) {
+            showStatus("Zu wenig Speicher – kleineren Ausschnitt (mehr Zoom) oder weniger Fotos")
+        } catch (e: Throwable) {
+            showStatus("Fehler beim Import: ${e.message}")
+        } finally {
+            busy = false
+            runOnUiThread { shutter.mode = ShutterView.Mode.IDLE }
+            status.postDelayed({ if (!busy) showStatus(null) }, 5000)
+        }
+    }
+
+    /** ARGB-Bild → Helligkeit (volle Auflösung) + Farbe (halbe Auflösung), wie ein Kamerabild (JPEG-Farbraum). */
+    private fun argbToFrame(b: Bitmap): Frame {
+        val w = b.width
+        val h = b.height
+        val px = IntArray(w * h)
+        b.getPixels(px, 0, w, 0, 0, w, h)
+        val y = ByteArray(w * h)
+        for (i in px.indices) {
+            val p = px[i]
+            y[i] = (0.299f * ((p shr 16) and 255) + 0.587f * ((p shr 8) and 255) + 0.114f * (p and 255)).roundToInt().coerceIn(0, 255).toByte()
+        }
+        val cw = w / 2
+        val ch = h / 2
+        val u = ByteArray(cw * ch)
+        val v = ByteArray(cw * ch)
+        for (yy in 0 until ch) for (xx in 0 until cw) {
+            var rs = 0
+            var gs = 0
+            var bs = 0
+            for (a in 0..1) for (c in 0..1) {
+                val p = px[(yy * 2 + a) * w + xx * 2 + c]
+                rs += (p shr 16) and 255; gs += (p shr 8) and 255; bs += p and 255
+            }
+            val r = rs / 4f
+            val g = gs / 4f
+            val bl = bs / 4f
+            u[yy * cw + xx] = (-0.168736f * r - 0.331264f * g + 0.5f * bl + 128f).roundToInt().coerceIn(0, 255).toByte()
+            v[yy * cw + xx] = (0.5f * r - 0.418688f * g - 0.081312f * bl + 128f).roundToInt().coerceIn(0, 255).toByte()
+        }
+        return Frame(y, u, v)
+    }
+
     // ───────────────────────── Diagnosebild ─────────────────────────
 
     /** Ausschnitt r (Anteile, Sensor-Ausrichtung) aus b, gedreht und auf Kachelgröße gebracht. */
@@ -2199,6 +2532,12 @@ class MainActivity : Activity() {
 
     companion object {
         private const val DIAG_TILE = 540
+        const val ACTION_IMPORT = "de.john.kameracheck.IMPORT"
+        const val EXTRA_URIS = "uris"
+        const val EXTRA_RECT = "rect"
+        const val EXTRA_ZOOM = "zoom"
+        private const val REQ_PHOTOS = 2
+        private const val REQ_PICK = 7
         /** Bis zu diesem Zoom macht der Bildprozessor den Ausschnitt (In-Sensor-Zoom des 50-MP-Sensors) */
         private const val ISP_ZOOM = 2f
         private const val YUV_BUDGET = 150_000_000L

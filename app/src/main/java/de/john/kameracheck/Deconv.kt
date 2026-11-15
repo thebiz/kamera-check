@@ -197,6 +197,56 @@ object Deconv {
         }
     }
 
+    /**
+     * Zähmen nach dem Entschärfen (Befund Diagnosebild 1.4, Johns Blick: „500 g“ stach heraus):
+     * Richardson-Lucy verstärkt kräftige Kanten viel stärker als feine, blasse Schrift – das Bild
+     * passt dann nicht mehr zusammen. Zwei Bremsen:
+     * 1. weiche Begrenzung der Änderung je Pixel (kleine Änderungen bleiben, große werden gedeckelt),
+     * 2. kein heller Saum: neuer Wert höchstens knapp über dem hellsten Nachbarn im Ausgangsbild (5×5).
+     *    Nach unten (dunkle Striche) darf mehr zurückgeholt werden – sonst blieben dünne Striche grau.
+     */
+    fun tame(
+        y: FloatArray, yd: FloatArray, w: Int, h: Int,
+        soft: Float = 0.15f, up: Float = 0.1f, down: Float = 0.6f,
+    ): FloatArray {
+        val lo = FloatArray(w * h)
+        val hi = FloatArray(w * h)
+        val tl = FloatArray(w * h)
+        val th = FloatArray(w * h)
+        val r = 2
+        for (yy in 0 until h) {
+            val row = yy * w
+            for (x in 0 until w) {
+                var mn = 1e9f
+                var mx = -1e9f
+                for (k in max(0, x - r)..min(w - 1, x + r)) {
+                    val v = y[row + k]
+                    if (v < mn) mn = v
+                    if (v > mx) mx = v
+                }
+                tl[row + x] = mn
+                th[row + x] = mx
+            }
+        }
+        for (yy in 0 until h) for (x in 0 until w) {
+            var mn = 1e9f
+            var mx = -1e9f
+            for (k in max(0, yy - r)..min(h - 1, yy + r)) {
+                val i = k * w + x
+                if (tl[i] < mn) mn = tl[i]
+                if (th[i] > mx) mx = th[i]
+            }
+            lo[yy * w + x] = mn
+            hi[yy * w + x] = mx
+        }
+        return FloatArray(w * h) { i ->
+            val d = yd[i] - y[i]
+            val t = soft * kotlin.math.tanh(d / soft)
+            val range = hi[i] - lo[i]
+            (y[i] + t).coerceIn(lo[i] - down * range - 0.01f, hi[i] + up * range + 0.01f)
+        }
+    }
+
     private fun parallel(n: Int, threads: Int, body: (Int, Int) -> Unit) {
         val k = max(1, min(threads, n))
         if (k == 1) {

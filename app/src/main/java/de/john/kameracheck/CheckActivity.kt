@@ -18,6 +18,8 @@ import kotlin.math.sqrt
 
 class CheckActivity : Activity() {
 
+    private val testLog = StringBuilder()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = BG
@@ -59,11 +61,46 @@ class CheckActivity : Activity() {
                 val send = Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_SUBJECT, "Kamera-Check")
-                    putExtra(Intent.EXTRA_TEXT, report)
+                    putExtra(Intent.EXTRA_TEXT, if (testLog.isEmpty()) report else "$testLog\n\n$report")
                 }
                 startActivity(Intent.createChooser(send, "Bericht teilen"))
             }
         })
+
+        // 50-MP-Test: probiert alle Wege zur vollen Sensorauflösung und nimmt wirklich auf
+        val testOut = TextView(this).apply {
+            textSize = 12.5f
+            setTextColor(0xFF5BE38A.toInt())
+            typeface = Typeface.MONOSPACE
+            setTextIsSelectable(true)
+            setLineSpacing(0f, 1.15f)
+            setPadding(0, (12 * dp).toInt(), 0, 0)
+        }
+        root.addView(Button(this).apply {
+            text = "50-MP-Test starten"
+            isAllCaps = false
+            setOnClickListener { btn ->
+                btn.isEnabled = false
+                testLog.setLength(0)
+                testOut.text = "Läuft … (dauert bis zu 2 Minuten, Handy ruhig hinlegen)"
+                Thread {
+                    try {
+                        FullResTest(this@CheckActivity) { line ->
+                            synchronized(testLog) { testLog.appendLine(line) }
+                            runOnUiThread { testOut.text = testLog.toString() }
+                        }.run()
+                    } catch (e: Throwable) {
+                        synchronized(testLog) { testLog.appendLine("Abbruch: ${e.message}") }
+                    }
+                    runOnUiThread {
+                        testOut.text = testLog.toString()
+                        btn.isEnabled = true
+                        (btn as Button).text = "50-MP-Test nochmal"
+                    }
+                }.start()
+            }
+        })
+        root.addView(testOut)
 
         root.addView(TextView(this).apply {
             text = report
