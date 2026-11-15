@@ -367,6 +367,16 @@ den Paketnamen `com.google.android.GoogleCamera` (Test G) und `org.codeaurora.sn
 (Test S) laufen neben der normalen App; in beiden wird der 50-MP-Test wiederholt.
 Rooten wurde verworfen (Banking-Apps, Garantie).
 
+**Ergebnis Namens-Test:** Auch als `GoogleCamera` und `snapcam` keine Größe über 12,6 MP.
+Aber der Bericht zeigt die **Hersteller-Schalter** des Sensors (MediaTek/Xiaomi), u. a.
+`com.mediatek.control.capture.remosaicenable`, `xiaomi.remosaic.enabled`,
+`com.xiaomi.control.qcfa.isSuperRemosaic`, `com.xiaomi.sensor.info.binningFactor`,
+`com.xiaomi.scaler.availableSuperResolutionStreamConfigurations`, `xiaomi.superResolution.yuvsize`.
+„Remosaic“ ist genau der Vorgang, der aus dem Vierer-Pixel-Sensor (Quad-Bayer) die vollen
+50 MP macht. **Version 1.8.2** liest die Werte dieser Schlüssel aus und nimmt wirklich damit auf:
+12 MP normal (Vergleich), 12 MP mit Remosaic (YUV und RAW), alle angebotenen
+Super-Resolution-Größen und die größte Größe in acht Hersteller-Sitzungsarten.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -418,6 +428,7 @@ Rooten wurde verworfen (Banking-Apps, Garantie).
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.8.2 | 50-MP-Test Stufe 2: Remosaic- und Super-Resolution-Schalter von Xiaomi/MediaTek |
 | 1.8.1 | Testversionen mit anderen Paketnamen für den 50-MP-Test |
 | 1.8 | Gegenprobe „nur nachgeschärft“, flache Kacheln übersprungen, mehr Zeit, Farben getrennt bei Bedarf |
 | 1.7 | KI-Entschärfen mit bekannter Unschärfe (DPIR/DRUNet) statt Allzweck-KI |

@@ -43,6 +43,10 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
     private class Attempt(
         val camId: String, val physId: String?, val size: Size, val format: Int,
         val maxRes: Boolean, val label: String,
+        /** Hersteller-Schalter (Name → Wert), die in Anfrage und Sitzung gesetzt werden */
+        val vendor: List<Pair<String, Int>> = emptyList(),
+        val sessionType: Int = SessionConfiguration.SESSION_REGULAR,
+        val tag: String = "",
     )
 
     fun run() {
@@ -83,8 +87,91 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
             log("${t.label}\n   → $r")
             if (r.startsWith("✓")) ok++
         }
-        log("\nFertig: $ok von ${todo.size} Versuchen lieferten ein Bild.")
+        log("\nFertig Stufe 1: $ok von ${todo.size} Versuchen lieferten ein Bild.")
+
+        // ── Stufe 2: Xiaomi-/MediaTek-Schalter ausprobieren ──
+        log("\n══ Stufe 2: Hersteller-Schalter (Remosaic = volle 50-MP-Pixel) ══")
+        for (id in listOf("0", "3")) {
+            val c = try { cm.getCameraCharacteristics(id) } catch (_: Exception) { continue }
+            vendorStage(id, c)
+        }
+        log("\nFertig. Bilder „test50mp_…“ in der Galerie: normal und remosaic vergleichen (Bildausschnitt und Schärfe).")
         log("Wichtig: Ein Bild mit 50-MP-Größe kann trotzdem nur hochgerechnet sein – die gespeicherten test50mp-Bilder bitte vergleichen.")
+    }
+
+    /** Werte der Hersteller-Schlüssel zeigen und mit den Remosaic-Schaltern wirklich aufnehmen. */
+    private fun vendorStage(id: String, c: CameraCharacteristics) {
+        log("\n── Kamera $id: Werte")
+        val interesting = listOf("superresolution", "remosaic", "qcfa", "binning", "sat.rawsize", "fakesat", "quad")
+        var srSizes = ArrayList<Pair<Int, Size>>()
+        for (k in c.keys) {
+            val n = k.name
+            if (interesting.none { n.lowercase().contains(it) }) continue
+            val v = try { c.get(k) } catch (e: Throwable) { "?" }
+            log("   $n = ${show(v)}")
+            if (n.contains("availableSuperResolutionStreamConfigurations") && v is IntArray) {
+                // Vermutlich wie die Android-Liste: Format, Breite, Höhe, Eingang
+                var i = 0
+                while (i + 3 < v.size) {
+                    val sz = Size(v[i + 1], v[i + 2])
+                    if (v[i + 3] == 0 && sz.width.toLong() * sz.height > 14_000_000L) srSizes += v[i] to sz
+                    i += 4
+                }
+            }
+        }
+        val reqNames = c.availableCaptureRequestKeys.map { it.name }
+        val remosaic = reqNames.filter { it.lowercase().contains("remosaic") && !it.lowercase().contains("type") }
+            .map { it to 1 }
+        log("   Remosaic-Schalter in Anfragen: ${if (remosaic.isEmpty()) "keine" else remosaic.joinToString { it.first }}")
+        srSizes = ArrayList(srSizes.distinctBy { "${it.first}/${it.second}" })
+        if (srSizes.isNotEmpty()) log("   Super-Resolution-Größen: ${srSizes.joinToString { "Format ${it.first}: ${mp(it.second)}" }}")
+
+        val base = Size(4096, 3072)
+        val list = ArrayList<Attempt>()
+        list += Attempt(id, null, base, ImageFormat.YUV_420_888, false, "Kamera $id · YUV 12 MP normal (Vergleich)", tag = "normal")
+        if (remosaic.isNotEmpty()) {
+            list += Attempt(id, null, base, ImageFormat.YUV_420_888, false, "Kamera $id · YUV 12 MP mit Remosaic", remosaic, tag = "remosaic")
+            list += Attempt(id, null, base, ImageFormat.RAW_SENSOR, false, "Kamera $id · RAW 12 MP mit Remosaic", remosaic, tag = "remosaic_raw")
+        }
+        for ((fmt, sz) in srSizes) {
+            val f = when (fmt) { 0x23 -> ImageFormat.YUV_420_888; 0x21 -> ImageFormat.JPEG; 0x20 -> ImageFormat.RAW_SENSOR; else -> continue }
+            list += Attempt(id, null, sz, f, false, "Kamera $id · Super-Resolution ${sz.width}×${sz.height} (Format $fmt) mit Remosaic", remosaic, tag = "sr")
+        }
+        // Hersteller-Sitzungsarten (eigene Betriebsmodi der Xiaomi-Kamera) – nur mit der größten Größe
+        val big = srSizes.filter { it.first == 0x23 }.maxByOrNull { it.second.width.toLong() * it.second.height }?.second
+            ?: Size(8192, 6144)
+        for (st in listOf(0x8001, 0x8002, 0x8003, 0x8005, 0x8007, 0x8009, 0x9000, 0x9001)) {
+            list += Attempt(id, null, big, ImageFormat.YUV_420_888, false,
+                "Kamera $id · ${big.width}×${big.height} in Sitzungsart 0x${Integer.toHexString(st)}", remosaic, st, "mode${Integer.toHexString(st)}")
+        }
+        for (t in list) {
+            val r = try { capture(t) } catch (e: Throwable) { "✗ ${e.javaClass.simpleName}: ${e.message?.take(120)}" }
+            log("${t.label}\n   → $r")
+        }
+    }
+
+    private fun show(v: Any?): String = when (v) {
+        null -> "–"
+        is IntArray -> if (v.size > 24) v.take(24).joinToString(",", "[", ", … (${v.size})]") else v.joinToString(",", "[", "]")
+        is LongArray -> v.joinToString(",", "[", "]")
+        is FloatArray -> v.joinToString(",", "[", "]")
+        is ByteArray -> if (v.size > 24) "${v.size} Bytes" else v.joinToString(",", "[", "]")
+        is Array<*> -> v.joinToString(",", "[", "]")
+        else -> v.toString()
+    }
+
+    /** Hersteller-Schalter setzen – der Datentyp ist unbekannt, also der Reihe nach probieren. */
+    @Suppress("UNCHECKED_CAST")
+    private fun setVendor(b: CaptureRequest.Builder, c: CameraCharacteristics, name: String, v: Int): Boolean {
+        val key = c.availableCaptureRequestKeys.firstOrNull { it.name == name } as CaptureRequest.Key<Any>? ?: return false
+        for (cand in listOf<Any>(v, intArrayOf(v), v.toByte(), byteArrayOf(v.toByte()), v.toLong(), longArrayOf(v.toLong()), v != 0)) {
+            try {
+                b.set(key, cand)
+                return true
+            } catch (_: Throwable) {
+            }
+        }
+        return false
     }
 
     private fun collect(id: String, phys: String?, c: CameraCharacteristics, out: MutableList<Attempt>) {
@@ -137,11 +224,20 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
             if (t.maxRes && Build.VERSION.SDK_INT >= 31) cfg.addSensorPixelModeUsed(CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION)
             val ready = CountDownLatch(1)
             var sErr: String? = null
-            d.createCaptureSession(SessionConfiguration(SessionConfiguration.SESSION_REGULAR, listOf(cfg), exec,
+            val chars = cm.getCameraCharacteristics(t.camId)
+            val sc = SessionConfiguration(t.sessionType, listOf(cfg), exec,
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(s: CameraCaptureSession) { session = s; ready.countDown() }
                     override fun onConfigureFailed(s: CameraCaptureSession) { sErr = "Sitzung abgelehnt"; ready.countDown() }
-                }))
+                })
+            // Hersteller-Schalter auch als Sitzungs-Parameter: Remosaic schaltet den Sensor-Modus um
+            var setOk = 0
+            if (t.vendor.isNotEmpty()) {
+                val sp = d.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+                for ((n, v) in t.vendor) if (setVendor(sp, chars, n, v)) setOk++
+                sc.sessionParameters = sp.build()
+            }
+            d.createCaptureSession(sc)
             if (!ready.await(6, TimeUnit.SECONDS)) return "✗ Sitzung: Zeit abgelaufen"
             val s = session ?: return "✗ ${sErr ?: "Sitzung abgelehnt"}"
 
@@ -171,6 +267,7 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
             if (t.maxRes && Build.VERSION.SDK_INT >= 31) {
                 b.set(CaptureRequest.SENSOR_PIXEL_MODE, CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION)
             }
+            for ((n, v) in t.vendor) setVendor(b, chars, n, v)
             val req = b.build()
             val t0 = System.currentTimeMillis()
             try {
@@ -186,12 +283,14 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
             val mpx = lastW.toLong() * lastH / 1e6
             val sizeTxt = "${lastW}×${lastH} (${"%.1f".format(mpx)} MP)"
             val saved = bytes?.let { jb ->
-                val name = "test50mp_${t.camId}${t.physId?.let { "-$it" } ?: ""}_${if (t.maxRes) "ultra" else "hr"}_${System.currentTimeMillis() % 100000}"
+                val kind = t.tag.ifEmpty { if (t.maxRes) "ultra" else "hr" }
+                val name = "test50mp_${t.camId}${t.physId?.let { "-$it" } ?: ""}_${kind}_${System.currentTimeMillis() % 100000}"
                 saveJpeg(jb, name)
                 " · gespeichert als $name"
             } ?: ""
             val verdict = if (mpx > 30) "✓ BILD IN VOLLER GRÖSSE" else "✓ Bild, aber nur"
-            return "$verdict $sizeTxt$saved"
+            val sw = if (t.vendor.isNotEmpty()) " · Schalter gesetzt: $setOk/${t.vendor.size}" else ""
+            return "$verdict $sizeTxt$saved$sw"
         } finally {
             try { session?.close() } catch (_: Exception) {}
             try { dev?.close() } catch (_: Exception) {}
