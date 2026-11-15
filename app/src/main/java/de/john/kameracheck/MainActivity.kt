@@ -2000,7 +2000,9 @@ class MainActivity : Activity() {
             // Rausch-Untergrenze (Johns A/B-Test 15.11.): auf dem feineren RAW-Raster unterschätzt die Messung das
             // Rauschen, die KI darf dann zu wenig glätten und verstärkt das 2-Pixel-Gittermuster („verpixelt“, helle Säume).
             val est = Dpir.noiseLevel(plane, w, h)
-            val noise = max(est * grid, NOISE_FLOOR * grid)
+            // Untergrenze nur auf feinerem Raster: auf dem normalen Raster bremste sie (1.12.1–1.14) die KI aus –
+            // 32 Bilder maßen weniger Rauschen, die KI rechnete aber trotzdem mit 2 und glättete nur (Test 15.11., 17:30)
+            val noise = if (grid > 1f) max(est * grid, NOISE_FLOOR * grid) else est
             if (c == 0) info += "Rauschen gemessen ${fmt(est * 255f)} · für die KI angesetzt ${fmt(noise * 255f)} (Stufen von 255)"
             val name = if (perColor) listOf("Rot", "Grün", "Blau")[c] + " " else ""
             val tc = SystemClock.elapsedRealtime()

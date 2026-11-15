@@ -536,6 +536,16 @@ A rechnet mit dem Referenzbild und den ersten 15 passenden Bildern (16, wie bish
 gleiche Ausrichtung, gleiches Referenzbild, gleiche Rechenkette. Erwartung bei reinem Rauschen:
 Rauschen sinkt um den Faktor √2 ≈ 1,4. Das Diagnosebild nennt „Rauschen gemessen“ für A und B.
 
+**Ergebnis 16 gegen 32 Bilder (15.11.2026, 17:30, Version 1.14):** ![Vergleich A/B 1.14](vergleich_ab_v1-14.jpg)
+Johns Eindruck: B ruhiger, Kleinschrift minimal besser lesbar, aber etwas weicher. Die Messung:
+Rauschen 0,9 → 0,7 (Erwartung ÷ 1,4 ≈ 0,64 – passt), Unschärfe bei beiden 1,4 px. **Aber:** Die KI
+rechnete bei *beiden* mit Rauschen 2 – die Untergrenze aus 1.12.1 (gedacht fürs feine RAW-Raster)
+galt auch auf dem normalen Raster. Das geringere Rauschen von B wurde also nicht zum kräftigeren
+Schärfen genutzt, nur zum Glätten. Wahrscheinlich hat die Untergrenze auch A seit 1.12.1 etwas
+weicher gemacht (Johns Bemerkung beim 1.13-Test: „das normale Bild ist jetzt ein bisschen schlechter“).
+**Version 1.14.1:** Untergrenze nur noch auf feinerem Raster; auf dem normalen Raster rechnet die
+KI wieder mit dem gemessenen Rauschen. Gleicher Test noch einmal.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -588,6 +598,7 @@ Rauschen sinkt um den Faktor √2 ≈ 1,4. Das Diagnosebild nennt „Rauschen ge
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.14.1 | KI rechnet auf normalem Raster wieder mit dem gemessenen Rauschen (Untergrenze nur fürs feine Raster) |
 | 1.14 | Vergleich A/B: 16 gegen 32 Bilder derselben Serie (ist Rauschen der Hebel?) |
 | 1.13.1 | Absturz in B behoben (Vorschau-Kachel doppelt benutzt), „Diagnose teilen“ merkt sich das Bild auch nach Neustart |
 | 1.13 | Vergleich A/B neu: dieselbe Kamera-Zoom-Serie gemittelt (A) gegen feines Raster 2× (B) |
