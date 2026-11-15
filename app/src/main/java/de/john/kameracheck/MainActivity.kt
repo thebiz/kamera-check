@@ -229,6 +229,7 @@ class MainActivity : Activity() {
         diagOn = getPreferences(MODE_PRIVATE).getBoolean("diag", true)
         ispZoomOn = getPreferences(MODE_PRIVATE).getBoolean("ispzoom", true)
         compareOn = getPreferences(MODE_PRIVATE).getBoolean("compare2", false)
+        hrFocusOn = getPreferences(MODE_PRIVATE).getBoolean("hrfocus", true)
         strongOn = getSharedPreferences("ki", MODE_PRIVATE).getBoolean("strong_on", false)
         updateChips()
 
@@ -915,6 +916,13 @@ class MainActivity : Activity() {
                     if (col != null && !col.done && col.yuv.size < col.yuvCount) {
                         col.yuv[img.timestamp] = SuperRes.copyFrame(img, col.region)
                         onBurstImage(col)
+                    } else if (col == null) {
+                        val hc = hrCollect
+                        if (hc != null && !hc.done && !lensMoving) {
+                            hc.sum += yuvSharpness(img, hc)
+                            hc.n++
+                            if (hc.n >= HR_FRAMES) hc.done = true
+                        }
                     }
                 } finally {
                     img.close()
@@ -1040,7 +1048,18 @@ class MainActivity : Activity() {
     private var pdafStartedAt = 0L
     private var pdafToken = 0
 
-    private class Sweep(val steps: FloatArray, val fine: Boolean, val quiet: Boolean, val restore: Float, val verify: Boolean = false) {
+    /** Feinfokus (1.21, Johns Befund: Autofokus liegt knapp neben der Stelle, die er von Hand findet) */
+    private var hrFocusOn = true
+
+    /** Messung im vollen Sensorbild für eine Stufe des Feinfokus: mehrere Bilder gemittelt */
+    private class HrCollect(val step: Int, val u: Float, val v: Float, val half: Int) {
+        var sum = 0.0
+        var n = 0
+        @Volatile var done = false
+    }
+    @Volatile private var hrCollect: HrCollect? = null
+
+    private class Sweep(val steps: FloatArray, val fine: Boolean, val quiet: Boolean, val restore: Float, val verify: Boolean = false, val hr: Boolean = false) {
         var i = 0
         var wait = 0
         var settled = 0
@@ -1082,6 +1101,7 @@ class MainActivity : Activity() {
         try {
             val b = baseRequest(CameraDevice.TEMPLATE_PREVIEW)
             b.addTarget(ps)
+            if (sweep?.hr == true) reader?.let { b.addTarget(it.surface) }   // Feinfokus misst im vollen Sensorbild
             b.set(CaptureRequest.CONTROL_ZOOM_RATIO, min(zoom, camMaxZoom))
             s.setRepeatingRequest(b.build(), lensCb, bg)
         } catch (_: Exception) {
@@ -1240,8 +1260,9 @@ class MainActivity : Activity() {
 
     private fun linspace(a: Float, b: Float, n: Int) = FloatArray(n) { a + (b - a) * it / (n - 1) }
 
-    private fun startSweep(fineAround: Float?, quiet: Boolean, verify: Boolean = false) {
+    private fun startSweep(fineAround: Float?, quiet: Boolean, verify: Boolean = false, hr: Boolean = false) {
         val steps = when {
+            hr && fineAround != null -> linspace(max(0f, fineAround - HR_RANGE), min(maxDiopter, fineAround + HR_RANGE), HR_STEPS)
             fineAround != null -> {
                 val r = if (quiet) 0.35f else max(0.5f, maxDiopter / 12f)
                 linspace(max(0f, fineAround - r), min(maxDiopter, fineAround + r), if (quiet) 5 else 7)
@@ -1250,7 +1271,8 @@ class MainActivity : Activity() {
             // Grob: dicht bei „fern“ (kleine Dioptrien), dort ist die Schärfentiefe am engsten verteilt
             else -> FloatArray(12) { i -> val t = i / 11f; t * t * maxDiopter }
         }
-        sweep = Sweep(steps, fineAround != null, quiet, focusDiopter, verify)
+        hrCollect = null
+        sweep = Sweep(steps, fineAround != null, quiet, focusDiopter, verify, hr)
         focusMode = FocusMode.SWEEP
         focusDiopter = steps[0]
         sweepX = focusView.fx
@@ -1286,8 +1308,25 @@ class MainActivity : Activity() {
                 return
             }
         }
+        if (sw.hr) {
+            // Feinfokus: im vollen Sensorbild unter dem Rahmen messen, 3 Bilder gemittelt
+            val hc = hrCollect
+            if (hc == null || hc.step != sw.i) {
+                hrCollect = hrFor(sw.i)
+                sw.wait++
+                return
+            }
+            if (!hc.done && sw.wait < SWEEP_MAX_WAIT + 30) {
+                sw.wait++
+                return
+            }
+            sw.settled = 0
+            sw.score[sw.i] = if (hc.done && hc.n > 0) (hc.sum / hc.n).toFloat() else measureSharpness(focusView.fx, focusView.fy)
+            hrCollect = null
+        } else {
         sw.settled = 0
         sw.score[sw.i] = measureSharpness(focusView.fx, focusView.fy)
+        }
         sw.i++
         sw.wait = 0
         if (sw.i < sw.steps.size) {
@@ -1323,8 +1362,16 @@ class MainActivity : Activity() {
         }
         var mn = sw.score[0]
         for (v in sw.score) mn = min(mn, v)
-        val flat = sw.score[bi] < mn * 1.06f
-        lockedScore = sw.score[bi]
+        // Feinfokus misst in engem Bereich – dort ist die Kurve naturgemäß flach, kein Grund für „unsicher“
+        val flat = !sw.hr && sw.score[bi] < mn * 1.06f
+        // Feinfokus: nach dem bestätigten Durchlauf noch einmal in kleinen Schritten im vollen Sensorbild
+        if (hrFocusOn && !sw.hr && !sw.quiet && !flat && !macro) {
+            focusView.state = FocusView.State.SEARCHING
+            startSweep(fineAround = best, quiet = false, hr = true)
+            return
+        }
+        // Maßstab fürs Nachprüfen in der Vorschau; nach dem Feinfokus (andere Messung) beim ersten Check nehmen
+        lockedScore = if (sw.hr) -1f else sw.score[bi]
         lowChecks = 0
         focusDiopter = best
         focusMode = FocusMode.LOCKED
@@ -1344,6 +1391,53 @@ class MainActivity : Activity() {
     }
 
     /** Kontrast (Gradientenenergie) in einem Feld um den Punkt, unabhängig von der Helligkeit. */
+    /** Feinfokus-Messfeld für eine Stufe: Rahmen in Sensor-Anteile umrechnen (wie [regionFor]) */
+    private fun hrFor(step: Int): HrCollect {
+        val nx = (focusView.fx / texture.width).coerceIn(0f, 1f)
+        val ny = (focusView.fy / texture.height).coerceIn(0f, 1f)
+        val (u, v) = if (sensorOrientation == 270) (1 - ny) to nx else ny to (1 - nx)
+        // Rahmenbreite (Hochformat-Breite ≙ Sensor-Höhe) in Sensorpixeln
+        val half = (focusView.localSize * 0.4f / texture.width * yuvSize.height).roundToInt().coerceIn(32, 384)
+        return HrCollect(step, u, v, half)
+    }
+
+    /** Schärfe (Gradientenenergie / Helligkeit², wie [measureSharpness]) im Y-Kanal des vollen Sensorbilds */
+    private fun yuvSharpness(img: android.media.Image, hc: HrCollect): Double {
+        val pl = img.planes[0]
+        val buf = pl.buffer
+        val rs = pl.rowStride
+        val ps = pl.pixelStride
+        val w = img.width
+        val h = img.height
+        val cx = (hc.u * w).roundToInt()
+        val cy = (hc.v * h).roundToInt()
+        val step = if (hc.half > 192) 2 else 1      // große Felder ausgedünnt messen – Zeit
+        val x0 = (cx - hc.half).coerceIn(1, w - 2)
+        val x1 = (cx + hc.half).coerceIn(2, w - 1)
+        val y0 = (cy - hc.half).coerceIn(1, h - 2)
+        val y1 = (cy + hc.half).coerceIn(2, h - 1)
+        fun at(x: Int, y: Int) = buf.get(y * rs + x * ps).toInt() and 255
+        var e = 0.0
+        var sum = 0.0
+        var n = 0
+        var y = y0
+        while (y < y1) {
+            var x = x0
+            while (x < x1) {
+                val gx = at(x + 1, y) - at(x - 1, y)
+                val gy = at(x, y + 1) - at(x, y - 1)
+                e += (gx * gx + gy * gy).toDouble()
+                sum += at(x, y)
+                n++
+                x += step
+            }
+            y += step
+        }
+        if (n == 0) return 0.0
+        val mean = sum / n + 8.0
+        return e / n / (mean * mean)
+    }
+
     private fun measureSharpness(fx: Float, fy: Float): Float {
         val tw = texture.width
         val th = texture.height
@@ -1467,9 +1561,10 @@ class MainActivity : Activity() {
         // Nachprüfen nur, wenn die Schärfe im Rahmen deutlich gesunken ist (zweimal hintereinander) –
         // sonst bleibt die Linse ruhig (früher alle 5 s ein kleiner Durchlauf: sichtbares „Pumpen“)
         val now = SystemClock.elapsedRealtime()
-        if (focusMode == FocusMode.LOCKED && lockedScore > 0f && now - lastCheckAt > CHECK_MS && now - lastSweepAt > RECHECK_MS) {
+        if (focusMode == FocusMode.LOCKED && lockedScore != 0f && now - lastCheckAt > CHECK_MS && now - lastSweepAt > RECHECK_MS) {
             lastCheckAt = now
             val sc = measureSharpness(nx, ny)
+            if (lockedScore < 0f) { lockedScore = sc; return }
             lowChecks = if (sc < lockedScore * 0.6f) lowChecks + 1 else 0
             if (lowChecks >= 2) {
                 lowChecks = 0
@@ -2469,6 +2564,7 @@ class MainActivity : Activity() {
         m.menu.add(0, 5, 3, if (diagOn) "Diagnosebild: an ✓" else "Diagnosebild: aus")
         m.menu.add(0, 6, 4, if (ispZoomOn) "Quelle: Kamera-Zoom ✓" else "Quelle: ganzes Sensorbild + RAW")
         m.menu.add(0, 11, 5, if (compareOn) "Vergleich A/B (16 gegen ${COMPARE_FRAMES} Bilder): an ✓" else "Vergleich A/B: aus")
+        m.menu.add(0, 12, 5, if (hrFocusOn) "Feinfokus (hochaufgelöst): an ✓" else "Feinfokus (hochaufgelöst): aus")
         m.menu.add(0, 7, 5, "Fotos importieren …")
         m.menu.add(0, 3, 6, "Kamera-Check")
         m.setOnMenuItemClickListener {
@@ -2493,6 +2589,12 @@ class MainActivity : Activity() {
                     showProfile(p, "50-MP-Schärfeprofil", "Wird beim Import von 50-MP-Fotos genutzt.", p.samples.map { where50(it.nx, it.ny) })
                 }
                 7 -> pickPhotos()
+                12 -> {
+                    hrFocusOn = !hrFocusOn
+                    getPreferences(MODE_PRIVATE).edit().putBoolean("hrfocus", hrFocusOn).apply()
+                    showStatus(if (hrFocusOn) "Feinfokus an: nach dem Scharfstellen feiner Suchlauf im vollen Sensorbild" else "Feinfokus aus (Fokus wie bis 1.20)")
+                    status.postDelayed({ if (!busy) showStatus(null) }, 2500)
+                }
                 11 -> {
                     compareOn = !compareOn
                     getPreferences(MODE_PRIVATE).edit().putBoolean("compare2", compareOn).apply()
@@ -3403,6 +3505,10 @@ class MainActivity : Activity() {
         private const val MAX_ZOOM_TOTAL = 25f
         private val TIMER_OPTIONS = intArrayOf(0, 1, 2, 3, 5, 10)
         private const val SWEEP_WAIT = 2
+        /** Feinfokus: ± so viele Dioptrien um das Ergebnis, in so vielen Stufen, je so viele Bilder gemittelt */
+        private const val HR_RANGE = 0.2f
+        private const val HR_STEPS = 9
+        private const val HR_FRAMES = 3
         /** Höchstens so viele Vorschaubilder auf die Linse warten, dann trotzdem messen */
         private const val SWEEP_MAX_WAIT = 12
         private const val CALIB_ZOOM = 2f

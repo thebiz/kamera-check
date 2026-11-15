@@ -671,6 +671,14 @@ ganz so“, **bis etwa 14× noch richtig, richtig gut**. Bei 14× wackelt vor al
 Auslöser. Neu: Selbstauslöser, Zeit wählbar (aus, 1, 2, 3, 5, 10 s – Tippen auf „Timer“ schaltet weiter,
 wird gemerkt), großer Countdown in der Bildmitte, erneutes Tippen auf den Auslöser bricht ab.
 
+**Feinfokus im vollen Sensorbild (Version 1.21):** Johns Befund nach 1.18.1: Von Hand findet er die
+schärfste Stellung besser, der Autofokus liegt „ein kleines bisschen daneben“. Grund: Phasen-AF ist bei
+wenig Licht ungenau, und die Kontrollmessung läuft auf dem Vorschaubild (≈ 1440 px, geglättet, verrauscht).
+Neu, nach der bisherigen Bestätigung: ein dritter Durchlauf in **9 kleinen Stufen über ± 0,2 Dioptrien**,
+gemessen im **Y-Kanal des vollen Sensorbilds** (4096 × 3072) direkt unter dem Rahmen, je Stufe **3 Bilder
+gemittelt**, erst bei stehender Linse; Ergebnis per Parabel verfeinert. Kostet etwa eine Sekunde.
+Abschaltbar im Menü „Mehr“ → „Feinfokus (hochaufgelöst)“ – zum fairen Vergleich mit dem bisherigen Fokus.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -723,6 +731,7 @@ wird gemerkt), großer Countdown in der Bildmitte, erneutes Tippen auf den Ausl�
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.21 | Feinfokus: feiner Suchlauf im vollen Sensorbild, je Stufe 3 Bilder gemittelt (abschaltbar) |
 | 1.20.1 | Timer-Knopf rechts neben dem Auslöser (war aus der Chip-Reihe gerutscht) |
 | 1.20 | Selbstauslöser mit wählbarer Zeit und Countdown |
 | 1.19.1 | Vorschau über 10× digital vergrößert (statt Rahmen), Fokusrahmen lässt sich auch verkleinern |
