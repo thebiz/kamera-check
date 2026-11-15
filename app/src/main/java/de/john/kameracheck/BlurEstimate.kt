@@ -97,8 +97,13 @@ object BlurEstimate {
         if (v.size < 20) return null
         v.sort()
         val k = max(20, v.size / 2)
-        return v[min(v.size - 1, k / 2)]
+        val s = v[min(v.size - 1, k / 2)]
+        // Die Steigungsmessung (Differenz über 2 Pixel) verbreitert jede Kante um eine feste
+        // Varianz von ≈ 0,5 px² – in Tests mit bekannter Unschärfe bestimmt (σ 1,1 … 5 px).
+        return sqrt(max(0.05f, s * s - MEASURE_BIAS))
     }
+
+    private const val MEASURE_BIAS = 0.5f
 
     /** Maximum und Minimum in einem win×win-Fenster (getrennt nach Zeilen und Spalten). */
     private fun rangeFilter(y: FloatArray, w: Int, h: Int, win: Int, mx: FloatArray, mn: FloatArray, tmp: FloatArray) {

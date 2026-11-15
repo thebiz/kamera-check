@@ -31,9 +31,12 @@ object Deconv {
         y: FloatArray, w: Int, h: Int, sx: Float, sy: Float,
         iters: Int, lambda: Float, threads: Int, budgetMs: Long,
         progress: ((Int) -> Unit)? = null,
+        /** Unschärfe (σx, σy) je Kachelmitte (Pixel x, y) – z. B. aus dem Schärfeprofil; null = überall sx, sy */
+        sigmaAt: ((Int, Int) -> FloatArray)? = null,
     ): Pair<FloatArray, Int> {
         val tile = 512
-        val margin = max(24, ceil(4.0 * max(sx, sy)).toInt() + 8)
+        var smax = max(sx, sy)
+        val tileSigma = HashMap<Int, FloatArray>()
         val tiles = ArrayList<IntArray>()
         var ty = 0
         while (ty < h) {
@@ -44,10 +47,16 @@ object Deconv {
             }
             ty += tile
         }
+        tiles.forEachIndexed { k, t ->
+            val s = sigmaAt?.invoke((t[0] + t[2]) / 2, (t[1] + t[3]) / 2) ?: floatArrayOf(sx, sy)
+            tileSigma[k] = s
+            smax = max(smax, max(s[0], s[1]))
+        }
+        val margin = max(24, ceil(4.0 * smax).toInt() + 8)
         // Tempo messen: erste Kachel mit wenigen Durchgängen
         val probe = tiles[0]
         val t0 = System.nanoTime()
-        runTile(y, w, h, probe, margin, sx, sy, 4, lambda, null)
+        runTile(y, w, h, probe, margin, tileSigma[0]!![0], tileSigma[0]!![1], 4, lambda, null)
         val perPixIter = (System.nanoTime() - t0) / 1e6 / 4 /
             ((probe[2] - probe[0] + 2 * margin).toDouble() * (probe[3] - probe[1] + 2 * margin))
         val pixels = tiles.sumOf { (it[2] - it[0] + 2 * margin).toDouble() * (it[3] - it[1] + 2 * margin) }
@@ -62,7 +71,8 @@ object Deconv {
                 while (true) {
                     val k = next.getAndIncrement()
                     if (k >= tiles.size) break
-                    runTile(y, w, h, tiles[k], margin, sx, sy, n, lambda, out)
+                    val s = tileSigma[k]!!
+                    runTile(y, w, h, tiles[k], margin, s[0], s[1], n, lambda, out)
                     progress?.invoke(done.incrementAndGet() * 100 / tiles.size)
                 }
             }.also { it.start() }

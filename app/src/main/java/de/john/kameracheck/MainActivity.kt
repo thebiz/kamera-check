@@ -57,6 +57,7 @@ import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 class MainActivity : Activity() {
 
@@ -112,6 +113,19 @@ class MainActivity : Activity() {
     private var pendingTrackStart = false
     private var draggingFocus = false
 
+    // ── Kalibrierung ──
+    /** -1 = aus; 0..4 = Schärfe-Muster an den Positionen, 5 = Graustufen */
+    private var calibStep = -1
+    private val calibSamples = ArrayList<Calib.Sample>()
+    private var pendingCalibShot = false
+    private lateinit var calibOverlay: CalibOverlay
+    private lateinit var calibBar: LinearLayout
+    private lateinit var calibText: TextView
+    private lateinit var calibSecondary: TextView
+    @Volatile private var profile: SharpProfile? = null
+
+    private class SharpProfile(val samples: List<Calib.Sample>, val r2: Float?, val flare: Float?, val date: String)
+
     // ── Lagesensor ──
     private val gyro = GyroLog()
     @Volatile private var lastShakePx = 0f
@@ -133,6 +147,8 @@ class MainActivity : Activity() {
 
     private inner class Collector(
         val region: Region, val count: Int, val zoomAtShot: Float, val rotation: Int, val withRaw: Boolean,
+        /** Kalibrierung: Schritt und Messrahmen im Ergebnis (Anteile x0, y0, x1, y1, Sensor-Ausrichtung) */
+        val calibStep: Int = -1, val calibBox: FloatArray? = null,
     ) {
         val yuv = java.util.TreeMap<Long, Frame>()
         val raw = java.util.TreeMap<Long, ShortArray>()
@@ -170,6 +186,7 @@ class MainActivity : Activity() {
             }
         }
 
+        loadProfile()
         strongOn = getSharedPreferences("ki", MODE_PRIVATE).getBoolean("strong_on", false)
         updateChips()
 
@@ -210,6 +227,8 @@ class MainActivity : Activity() {
         previewBox.addView(texture, FrameLayout.LayoutParams(-1, -1))
         focusView = FocusView(this)
         previewBox.addView(focusView, FrameLayout.LayoutParams(-1, -1))
+        calibOverlay = CalibOverlay(this)
+        previewBox.addView(calibOverlay, FrameLayout.LayoutParams(-1, -1))
 
         // KI-Lupe: Mitte des Bildes, von der KI ×4 rekonstruiert
         lupeImage = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_XY }
@@ -280,12 +299,12 @@ class MainActivity : Activity() {
         })
 
         val info = TextView(this).apply {
-            text = "Check"
+            text = "Mehr"
             setTextColor(FG)
             textSize = 13f
             setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
             background = chipBg(false)
-            setOnClickListener { startActivity(Intent(this@MainActivity, CheckActivity::class.java)) }
+            setOnClickListener { v -> showMoreMenu(v) }
         }
         previewBox.addView(info, FrameLayout.LayoutParams(-2, -2, Gravity.END or Gravity.TOP).apply {
             topMargin = dp(12f); rightMargin = dp(12f)
@@ -420,7 +439,7 @@ class MainActivity : Activity() {
         }
         shotRow.addView(thumb, LinearLayout.LayoutParams(dp(54f), dp(54f)))
         shutter = ShutterView(this).apply {
-            setOnClickListener { shoot() }
+            setOnClickListener { if (calibStep >= 0) calibShutter() else shoot() }
         }
         shotRow.addView(shutter, LinearLayout.LayoutParams(dp(74f), dp(74f)).apply {
             leftMargin = dp(32f); rightMargin = dp(32f)
@@ -437,6 +456,35 @@ class MainActivity : Activity() {
         panel.addView(hint, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(10f) })
 
         root.addView(panel, LinearLayout.LayoutParams(-1, -2))
+
+        // Kalibrier-Leiste: Anweisung + Abbrechen/Überspringen (überdeckt Zoom und Chips während der Kalibrierung)
+        calibBar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16f), dp(10f), dp(16f), dp(10f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16f).toFloat()
+                setColor(0xF2181A1C.toInt())
+                setStroke(dp(1.5f), 0xFF5BE38A.toInt())
+            }
+            visibility = View.GONE
+            isClickable = true
+        }
+        calibText = TextView(this).apply {
+            setTextColor(FG)
+            textSize = 15f
+            setLineSpacing(0f, 1.2f)
+        }
+        calibBar.addView(calibText)
+        calibSecondary = TextView(this).apply {
+            setTextColor(0xFF5BE38A.toInt())
+            textSize = 14f
+            setPadding(0, dp(8f), 0, 0)
+            setOnClickListener { calibSecondaryAction() }
+        }
+        calibBar.addView(calibSecondary)
+        previewBox.addView(calibBar, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply {
+            topMargin = dp(52f); leftMargin = dp(12f); rightMargin = dp(12f)
+        })
         setContentView(root)
 
         texture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -975,6 +1023,10 @@ class MainActivity : Activity() {
             showStatus("Fokus ${distText(best)}")
             status.postDelayed({ if (!busy) showStatus(null) }, 1200)
         }
+        if (pendingCalibShot) {
+            pendingCalibShot = false
+            status.postDelayed({ shoot() }, 250)
+        }
     }
 
     /** Kontrast (Gradientenenergie) in einem Feld um den Punkt, unabhängig von der Helligkeit. */
@@ -1141,7 +1193,7 @@ class MainActivity : Activity() {
         val rawBytes = region.rw.toLong() * region.rh * 2
         val count = if (withRaw) (RAW_BUDGET / rawBytes).toInt().coerceIn(8, 30) else if (z >= 2f) 16 else 8
         val rotation = (sensorOrientation + deviceOrientation) % 360
-        val col = Collector(region, count, z, rotation, withRaw)
+        val col = Collector(region, count, z, rotation, withRaw, calibStep, if (calibStep >= 0) calibBoxCrop() else null)
         collecting = col
         showStatus(null)
         showHold("Ruhig halten …")
@@ -1291,8 +1343,15 @@ class MainActivity : Activity() {
                         val rawRef = rawKeys.indices.minByOrNull { kotlin.math.abs(rawKeys[it] - refTs) } ?: 0
                         val shake = shakeWeights(rawKeys, col.results)
                         if (shake != null) srNote += " · ${shake.second}"
-                        val out = RawSR.run(raws, geo, rawParams(result), rawRef, res.refY, res.mergedY, 4, shake?.first) {
+                        val out = RawSR.run(raws, geo, rawParams(result), rawRef, res.refY, res.mergedY, 4, shake?.first, col.calibBox) {
                             showStatus(it)
+                        }
+                        if (col.calibBox != null) {
+                            raws.clear()
+                            res.merged.recycle()
+                            res.single.recycle()
+                            handleCalibResult(col, out)
+                            return@execute
                         }
                         real = SuperRes.toBitmap(out.y, res.chroma, r, out.u, out.wo, out.ho)
                         res.merged.recycle()
@@ -1307,6 +1366,10 @@ class MainActivity : Activity() {
                     raws.clear()
                 }
 
+                if (col.calibBox != null) {
+                    calibMessage("RAW-Bilder waren nicht verfügbar – bitte nochmal auslösen.")
+                    return@execute
+                }
                 if (!half) info += "${res.used} Bilder gemittelt (ohne RAW)"
 
                 // 3. Unschärfe messen (Schrift als Eichmaß, je Richtung, je Bildbereich)
@@ -1316,17 +1379,38 @@ class MainActivity : Activity() {
 
                 // 4. Kameramodell: physikalisches Minimum, Messung darauf eingrenzen
                 val phys = physicalMinimum(half)
-                val lo = phys.total * gridU
-                val hi = (phys.total + CameraModel.PLAUSIBLE_EXTRA_PX) * gridU
+                val prof = if (half) profile else null
+                val swY = yuvSize.width.toFloat()
+                val shY = yuvSize.height.toFloat()
+                // Schärfeprofil (kalibriert) an der Bildmitte, im Ergebnis-Raster
+                val pc = prof?.let {
+                    val c = Calib.sigmaAt(it.samples, (r.cx + r.cw / 2f) / swY, (r.cy + r.ch / 2f) / shY)
+                    floatArrayOf(c[0] * gridU, c[1] * gridU)
+                }
+                val lo = pc?.let { min(it[0], it[1]) } ?: (phys.total * gridU)
+                val hi = (if (pc != null) max(pc[0], pc[1]) / gridU else phys.total) * gridU + CameraModel.PLAUSIBLE_EXTRA_PX * gridU
                 val sx = blur.sx.coerceIn(lo, hi)
                 val sy = blur.sy.coerceIn(lo, hi)
                 info += "Unschärfe gemessen ${fmt(blur.sx)}/${fmt(blur.sy)} px" +
-                    (if (blur.fromText) " (an Schrift)" else "") + " · Physik-Minimum ${fmt(lo)} px"
+                    (if (blur.fromText) " (an Schrift)" else "") +
+                    (if (pc != null) " · Objektiv laut Profil ${fmt(pc[0])}/${fmt(pc[1])} px" else " · Physik-Minimum ${fmt(lo)} px")
                 if (sx != blur.sx || sy != blur.sy) info += "→ physikalisch begrenzt auf ${fmt(sx)}/${fmt(sy)} px"
+
+                // Je Bildbereich: Profil + Zusatz-Unschärfe dieses Fotos (Fokus, Verwacklung) quadratisch addiert
+                val sigmaMap: ((Int, Int) -> FloatArray)? = if (prof != null && pc != null) {
+                    val ex2 = max(0f, sx * sx - pc[0] * pc[0])
+                    val ey2 = max(0f, sy * sy - pc[1] * pc[1])
+                    info += "Schärfeprofil aktiv (kalibriert ${prof.date}) · Zusatz-Unschärfe ${fmt(sqrt(ex2))}/${fmt(sqrt(ey2))} px"
+                    val fn: (Int, Int) -> FloatArray = { px, py ->
+                        val p = Calib.sigmaAt(prof.samples, (r.cx + px / gridU) / swY, (r.cy + py / gridU) / shY)
+                        floatArrayOf(sqrt((p[0] * gridU) * (p[0] * gridU) + ex2), sqrt((p[1] * gridU) * (p[1] * gridU) + ey2))
+                    }
+                    fn
+                } else null
 
                 // 5. Physikalisch entschärfen (nichts erfinden, nur Gedämpftes zurückholen)
                 val tDec = SystemClock.elapsedRealtime()
-                val (sharp, decIters) = deblurBitmap(real, sx, sy, if (strongOn) 150 else 80, if (strongOn) 60_000L else 25_000L) { pct ->
+                val (sharp, decIters) = deblurBitmap(real, sx, sy, if (strongOn) 150 else 80, if (strongOn) 60_000L else 25_000L, sigmaMap) { pct ->
                     showStatus("Entschärfe … $pct %")
                 }
                 info += "Entschärft: $decIters Durchgänge (Richardson-Lucy mit Kantenschutz)"
@@ -1497,7 +1581,8 @@ class MainActivity : Activity() {
 
     /** Helligkeit entschärfen, Farbe beibehalten (Helligkeits-Unterschied wird auf R, G, B übertragen). */
     private fun deblurBitmap(
-        b: Bitmap, sx: Float, sy: Float, iters: Int, budgetMs: Long, progress: (Int) -> Unit,
+        b: Bitmap, sx: Float, sy: Float, iters: Int, budgetMs: Long,
+        sigmaAt: ((Int, Int) -> FloatArray)?, progress: (Int) -> Unit,
     ): Pair<Bitmap, Int> {
         val w = b.width
         val h = b.height
@@ -1507,7 +1592,7 @@ class MainActivity : Activity() {
             val p = px[i]
             (((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f) / 255f
         }
-        val (yd, n) = Deconv.deconvolve(y, w, h, sx, sy, iters, 0.012f, 4, budgetMs) { pct -> progress(pct) }
+        val (yd, n) = Deconv.deconvolve(y, w, h, sx, sy, iters, 0.012f, 4, budgetMs, { pct -> progress(pct) }, sigmaAt)
         for (i in px.indices) {
             val d = (yd[i] - y[i]) * 255f
             val p = px[i]
@@ -1598,6 +1683,275 @@ class MainActivity : Activity() {
         return w to note
     }
 
+    // ───────────────────────── Kalibrierung ─────────────────────────
+
+    /** Positionen des Zielrahmens (Mitte der Vorschau, dann die vier Ecken) */
+    private val calibSpots = listOf(
+        "Mitte" to (0.5f to 0.5f),
+        "oben links" to (0.22f to 0.17f),
+        "oben rechts" to (0.78f to 0.17f),
+        "unten links" to (0.22f to 0.83f),
+        "unten rechts" to (0.78f to 0.83f),
+    )
+
+    private fun showMoreMenu(anchor: View) {
+        val m = android.widget.PopupMenu(this, anchor)
+        m.menu.add(0, 1, 0, if (profile != null) "Neu kalibrieren" else "Kalibrieren")
+        if (profile != null) m.menu.add(0, 2, 1, "Kalibrierung löschen")
+        m.menu.add(0, 3, 2, "Kamera-Check")
+        m.setOnMenuItemClickListener {
+            when (it.itemId) {
+                1 -> startCalibration()
+                2 -> {
+                    File(filesDir, PROFILE_FILE).delete()
+                    profile = null
+                    showStatus("Kalibrierung gelöscht")
+                    status.postDelayed({ if (!busy) showStatus(null) }, 2000)
+                }
+                3 -> startActivity(Intent(this, CheckActivity::class.java))
+            }
+            true
+        }
+        m.show()
+    }
+
+    private fun startCalibration() {
+        if (rawReader == null) {
+            showStatus("Kalibrieren braucht RAW – auf diesem Gerät nicht verfügbar")
+            return
+        }
+        val pad = dp(20f)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(pad, pad, pad, dp(8f))
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        box.addView(TextView(this).apply {
+            text = "Öffne das Testmuster auf dem iPad – QR-Code mit der iPad-Kamera scannen:"
+            setTextColor(FG)
+            textSize = 15f
+        })
+        qrBitmap(PATTERN_URL, dp(220f))?.let { qr ->
+            box.addView(ImageView(this).apply { setImageBitmap(qr) }, LinearLayout.LayoutParams(dp(220f), dp(220f)).apply {
+                topMargin = dp(12f); bottomMargin = dp(12f)
+            })
+        }
+        box.addView(TextView(this).apply {
+            text = "Auf dem iPad: True Tone, Night Shift und Auto-Helligkeit aus, Helligkeit voll, „Schärfe-Muster“ antippen.\n\n" +
+                "Dann führt dich die App durch 6 Aufnahmen: das Muster in der Mitte und in den vier Ecken, zum Schluss die Graustufen. " +
+                "Stell dich so weit weg (ca. 1,5 m), dass das iPad den grünen Rahmen ausfüllt. Die App stellt selbst scharf und löst aus."
+            setTextColor(MUTED)
+            textSize = 13.5f
+            setLineSpacing(0f, 1.2f)
+        })
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Objektiv kalibrieren")
+            .setView(android.widget.ScrollView(this).apply { addView(box) })
+            .setPositiveButton("Los") { _, _ -> beginCalibration() }
+            .setNegativeButton("Abbrechen", null)
+            .show()
+    }
+
+    private fun beginCalibration() {
+        calibSamples.clear()
+        calibStep = 0
+        clearFocusPoint()
+        setZoom(CALIB_ZOOM)
+        lupeOn = false
+        lupeBox.visibility = View.GONE
+        updateChips()
+        updateCalibUi(null)
+    }
+
+    private fun endCalibration() {
+        calibStep = -1
+        pendingCalibShot = false
+        calibOverlay.center = null
+        calibBar.visibility = View.GONE
+        clearFocusPoint()
+    }
+
+    /** Anweisung für den aktuellen Schritt; note = Ergebnis des vorigen Schritts */
+    private fun updateCalibUi(note: String?) = runOnUiThread {
+        if (calibStep < 0) return@runOnUiThread
+        val head = note?.let { "$it\n\n" } ?: ""
+        if (calibStep < calibSpots.size) {
+            val (name, pos) = calibSpots[calibStep]
+            calibOverlay.center = pos
+            calibOverlay.label = "Schärfe-Muster · $name"
+            calibText.text = head + "Schritt ${calibStep + 1} von 6 · Schärfe $name\n" +
+                "iPad mit dem Schärfe-Muster in den grünen Rahmen, dann auslösen."
+            calibSecondary.text = "Kalibrierung abbrechen"
+        } else {
+            calibOverlay.center = 0.5f to 0.5f
+            calibOverlay.label = "Graustufen"
+            calibText.text = head + "Schritt 6 von 6 · Graustufen\n" +
+                "Einmal aufs iPad tippen (Graustufen), iPad in den Rahmen, auslösen."
+            calibSecondary.text = "Graustufen überspringen und speichern"
+        }
+        calibBar.visibility = View.VISIBLE
+    }
+
+    private fun calibSecondaryAction() {
+        if (calibStep >= calibSpots.size && calibSamples.size >= 3) {
+            saveProfile(null)
+        } else {
+            endCalibration()
+            showStatus("Kalibrierung abgebrochen")
+            status.postDelayed({ if (!busy) showStatus(null) }, 2000)
+        }
+    }
+
+    /** Auslöser im Kalibrier-Modus: erst auf die Rahmenmitte scharfstellen, dann aufnehmen. */
+    private fun calibShutter() {
+        if (busy) return
+        if (kotlin.math.abs(zoom - CALIB_ZOOM) > 0.01f) setZoom(CALIB_ZOOM)
+        val r = calibOverlay.boxRect() ?: return
+        pendingCalibShot = true
+        showStatus("Stelle auf das Muster scharf …")
+        setFocusPoint(r.centerX(), r.centerY())
+        if (maxDiopter <= 0f) {
+            pendingCalibShot = false
+            shoot()
+        }
+    }
+
+    /** Vorschau-Punkt (Hochformat, 0..1) → Ausschnitt in Sensor-Ausrichtung (0..1) */
+    private fun previewToCrop(nx: Float, ny: Float): Pair<Float, Float> =
+        if (sensorOrientation == 270) (1 - ny) to nx else ny to (1 - nx)
+
+    /** Zielrahmen als Anteile des Ergebnisbildes (Sensor-Ausrichtung): x0, y0, x1, y1 */
+    private fun calibBoxCrop(): FloatArray? {
+        val r = calibOverlay.boxRect() ?: return null
+        val w = calibOverlay.width.toFloat()
+        val h = calibOverlay.height.toFloat()
+        val a = previewToCrop(r.left / w, r.top / h)
+        val b = previewToCrop(r.right / w, r.bottom / h)
+        return floatArrayOf(min(a.first, b.first), min(a.second, b.second), max(a.first, b.first), max(a.second, b.second))
+    }
+
+    private fun calibMessage(msg: String) {
+        showStatus(null)
+        updateCalibUi("⚠ $msg")
+    }
+
+    private fun handleCalibResult(col: Collector, out: RawSR.Out) {
+        val planes = out.planes ?: return calibMessage("Messung fehlgeschlagen – bitte nochmal.")
+        val bw = out.boxW
+        val bh = out.boxH
+        val box = col.calibBox!!
+        if (col.calibStep < calibSpots.size) {
+            val m = Calib.measureSharpness(planes, bw, bh, out.u, lastShakePx)
+                ?: return calibMessage("Keine klaren Kanten im Rahmen – liegt das Schärfe-Muster ganz im grünen Rahmen?")
+            val (sig, edges) = m
+            // Rahmenmitte → Position auf dem ganzen Sensor
+            val z = col.zoomAtShot
+            val cxN = (box[0] + box[2]) / 2f
+            val cyN = (box[1] + box[3]) / 2f
+            val sample = Calib.Sample(0.5f + (cxN - 0.5f) / z, 0.5f + (cyN - 0.5f) / z, sig, edges)
+            calibSamples += sample
+            val l = sample.luma()
+            val name = calibSpots[col.calibStep].first
+            val note = "✓ $name: Schärfe ${fmt2(l[0])}/${fmt2(l[1])} px · R ${fmt2(avg(sig[0]))} · G ${fmt2(avg(sig[1]))} · B ${fmt2(avg(sig[2]))}"
+            calibStep = col.calibStep + 1
+            showStatus(null)
+            updateCalibUi(note)
+        } else {
+            val y = FloatArray(bw * bh) { 0.25f * planes[0][it] + 0.5f * planes[1][it] + 0.25f * planes[2][it] }
+            val wedge = Calib.analyzeWedge(y, bw, bh)
+                ?: return calibMessage("Graustufen nicht erkannt – zeigt das iPad die Graustufen und füllt es den Rahmen?")
+            saveProfile(wedge)
+        }
+    }
+
+    private fun avg(a: FloatArray) = (a[0] + a[1]) / 2f
+
+    private fun fmt2(v: Float): String = String.format(Locale.GERMANY, "%.2f", v)
+
+    private fun saveProfile(wedge: Calib.Wedge?) {
+        val date = SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY).format(Date())
+        val json = org.json.JSONObject().apply {
+            put("date", date)
+            put("device", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
+            put("samples", org.json.JSONArray().apply {
+                for (s in calibSamples) put(org.json.JSONObject().apply {
+                    put("nx", s.nx.toDouble())
+                    put("ny", s.ny.toDouble())
+                    put("edges", s.edges)
+                    put("sig", org.json.JSONArray().apply {
+                        for (c in 0 until 3) put(org.json.JSONArray().apply { put(s.sig[c][0].toDouble()); put(s.sig[c][1].toDouble()) })
+                    })
+                })
+            })
+            if (wedge != null) {
+                put("r2", wedge.r2.toDouble())
+                put("flare", wedge.flare.toDouble())
+            }
+        }
+        File(filesDir, PROFILE_FILE).writeText(json.toString(2))
+        profile = SharpProfile(calibSamples.toList(), wedge?.r2, wedge?.flare, date)
+
+        // Zusammenfassung
+        val center = calibSamples.first().luma()
+        val corners = calibSamples.drop(1).map { (it.luma()[0] + it.luma()[1]) / 2f }
+        val worst = corners.maxOrNull()
+        val spread = calibSamples.maxOf { Calib.colorSpread(it) }
+        val lines = ArrayList<String>()
+        lines += "Mitte: ${fmt2((center[0] + center[1]) / 2f)} px Unschärfe (Sensorpixel)"
+        if (worst != null) lines += "Ecken: bis ${fmt2(worst)} px (${((worst / ((center[0] + center[1]) / 2f) - 1f) * 100).roundToInt()} % weicher als die Mitte)"
+        lines += "Farben: R/B weichen bis ${(spread * 100).roundToInt()} % von Grün ab"
+        if (wedge != null) {
+            lines += "Linearität des Sensors: R² ${String.format(Locale.GERMANY, "%.4f", wedge.r2)}"
+            lines += "Streulicht/Spiegelung: ${String.format(Locale.GERMANY, "%.1f", wedge.flare * 100)} %" +
+                if (wedge.flare > 0.05f) " – eher hoch, Raum abdunkeln wäre besser" else " ✓"
+        }
+        endCalibration()
+        runOnUiThread {
+            android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Kalibrierung gespeichert ✓")
+                .setMessage(lines.joinToString("\n\n") + "\n\nAb jetzt nutzt jedes Foto ab 2× dieses Schärfeprofil beim Entschärfen.")
+                .setPositiveButton("Fertig", null)
+                .show()
+        }
+    }
+
+    private fun loadProfile() {
+        try {
+            val f = File(filesDir, PROFILE_FILE)
+            if (!f.exists()) return
+            val j = org.json.JSONObject(f.readText())
+            val arr = j.getJSONArray("samples")
+            val list = (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                val sg = o.getJSONArray("sig")
+                Calib.Sample(
+                    o.getDouble("nx").toFloat(), o.getDouble("ny").toFloat(),
+                    Array(3) { c -> val a = sg.getJSONArray(c); floatArrayOf(a.getDouble(0).toFloat(), a.getDouble(1).toFloat()) },
+                    o.optInt("edges", 0),
+                )
+            }
+            if (list.isNotEmpty()) {
+                profile = SharpProfile(
+                    list,
+                    if (j.has("r2")) j.getDouble("r2").toFloat() else null,
+                    if (j.has("flare")) j.getDouble("flare").toFloat() else null,
+                    j.optString("date", ""),
+                )
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    /** QR-Code als Bild (für den Testmuster-Link). */
+    private fun qrBitmap(text: String, size: Int): Bitmap? = try {
+        val m = com.google.zxing.qrcode.QRCodeWriter().encode(text, com.google.zxing.BarcodeFormat.QR_CODE, size, size,
+            mapOf(com.google.zxing.EncodeHintType.MARGIN to 2))
+        val px = IntArray(size * size) { i -> if (m.get(i % size, i / size)) Color.BLACK else Color.WHITE }
+        Bitmap.createBitmap(px, size, size, Bitmap.Config.ARGB_8888)
+    } catch (_: Throwable) {
+        null
+    }
+
     private fun cacheJpeg(b: Bitmap, name: String) {
         File(cacheDir, name).outputStream().use { b.compress(Bitmap.CompressFormat.JPEG, 95, it) }
     }
@@ -1615,6 +1969,9 @@ class MainActivity : Activity() {
         private const val MUTED = 0xFF8A8A8A.toInt()
         private const val MAX_AI_INPUT = 1024
         private const val SWEEP_WAIT = 2
+        private const val CALIB_ZOOM = 2f
+        private const val PROFILE_FILE = "schaerfeprofil.json"
+        private const val PATTERN_URL = "https://claude.ai/artifact/STqv4hLLZ5vm1NSBR2tb6k"
         private const val RAW_BUDGET = 150_000_000L
         private const val RECHECK_MS = 5000L
     }

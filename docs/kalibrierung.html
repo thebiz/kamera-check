@@ -1,0 +1,191 @@
+<title>KI-Zoom Kalibriermuster</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Bewusst ein einziger Look: dunkle Bedienoberfläche, die Muster selbst in festen, exakten Werten
+     (reines Weiß/Schwarz, Graustufen in gleichen Lichtschritten) – unabhängig vom Theme. */
+  :root {
+    --bg: #101113;
+    --panel: #1a1c1f;
+    --fg: #ececea;
+    --muted: #9a9c98;
+    --line: #2c2f33;
+    --go: #5be38a;
+    --display: "Space Grotesk", system-ui, sans-serif;
+    --body: "Inter", system-ui, sans-serif;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--fg); font: 16px/1.55 var(--body); margin: 0; }
+  #intro {
+    max-width: 620px; margin: 0 auto;
+    padding-block: 28px 40px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: flex; flex-direction: column; gap: 20px;
+  }
+  h1 { font: 600 1.7rem/1.2 var(--display); margin: 0; text-wrap: balance; }
+  .lead { color: var(--muted); margin: 0; }
+  ol { margin: 0; padding-left: 1.3em; display: grid; gap: 10px; }
+  li { padding-left: 4px; }
+  li b { font-weight: 600; }
+  .note { font-size: 0.9rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; margin: 0; }
+  .buttons { display: flex; gap: 12px; flex-wrap: wrap; }
+  button {
+    font: 600 1rem var(--body); border-radius: 999px; padding: 14px 22px; cursor: pointer;
+    border: 1.5px solid var(--line); background: var(--panel); color: var(--fg);
+  }
+  button.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  button:focus-visible { outline: 3px solid var(--go); outline-offset: 2px; }
+  .steps { font: 500 0.78rem var(--body); letter-spacing: 0.08em; text-transform: uppercase; color: var(--go); }
+  #stage { position: fixed; inset: 0; background: #ffffff; touch-action: manipulation; }
+  #stage canvas { display: block; width: 100%; height: 100%; }
+  #hint {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    font: 500 13px var(--body); color: #7d7d7d; background: rgba(255,255,255,0.85);
+    padding: 6px 12px; border-radius: 999px; transition: opacity 0.6s; white-space: nowrap;
+  }
+  @media (prefers-reduced-motion: reduce) { #hint { transition: none; } }
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@600&display=swap">
+
+<section id="intro">
+  <div class="steps">Kamera-Check · Kalibrierung</div>
+  <h1>Kalibriermuster für dein Objektiv</h1>
+  <p class="lead">Dieses iPad zeigt gleich zwei Muster, die dein Handy aus etwa 2 Metern abfotografiert. Daraus misst die App, wie dein Objektiv in der Mitte und in den Ecken unscharf abbildet.</p>
+  <ol>
+    <li><b>True Tone, Night Shift und Auto-Helligkeit aus</b>, Helligkeit ganz hoch (Kontrollzentrum bzw. Einstellungen › Anzeige).</li>
+    <li><b>Spiegelungen vermeiden:</b> keine Lampe oder kein Fenster hinter dir, iPad notfalls leicht schräg stellen.</li>
+    <li><b>iPad hinstellen</b>, zum Beispiel an ein Buch gelehnt, und mit dem Handy etwa 2 Meter zurückgehen.</li>
+    <li>In der App <b>Mehr › Kalibrieren</b> öffnen und den Anweisungen folgen. Die App sagt dir, wann du hier auf „Graustufen“ wechseln sollst.</li>
+  </ol>
+  <div class="buttons">
+    <button class="primary" id="b-sharp" type="button">Schärfe-Muster</button>
+    <button id="b-gray" type="button">Graustufen</button>
+  </div>
+  <p class="note">Im Muster: einmal tippen wechselt zwischen Schärfe und Graustufen, doppelt tippen führt hierher zurück. Die Graustufen sind in gleichen Lichtschritten abgestuft (0 bis 100 % Leuchtdichte in Zehnerschritten), damit die App die Linearität des Sensors prüfen kann.</p>
+</section>
+
+<div id="stage" hidden>
+  <canvas id="cv"></canvas>
+  <div id="hint"></div>
+</div>
+
+<script>
+(() => {
+  const intro = document.getElementById('intro');
+  const stage = document.getElementById('stage');
+  const cv = document.getElementById('cv');
+  const hint = document.getElementById('hint');
+  const ctx = cv.getContext('2d');
+  let mode = null, hintTimer = 0, wake = null, lastTap = 0;
+
+  // Graustufen in gleichen Schritten der Leuchtdichte: L = i/10 → sRGB-Wert
+  const linToSrgb = (l) => l <= 0.0031308 ? 12.92 * l : 1.055 * Math.pow(l, 1 / 2.4) - 0.055;
+  const GRAY = Array.from({ length: 11 }, (_, i) => Math.round(255 * linToSrgb(i / 10)));
+
+  function size() {
+    const dpr = window.devicePixelRatio || 1;
+    const w = stage.clientWidth, h = stage.clientHeight;
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+    return { W: cv.width, H: cv.height };
+  }
+
+  function drawSharp() {
+    const { W, H } = size();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, W, H);
+    // Raster schräg gestellter schwarzer Quadrate (5°): jede Kante ist ein exakter Hell-Dunkel-Sprung
+    const landscape = W >= H;
+    const cols = landscape ? 4 : 3, rows = landscape ? 3 : 4;
+    const cw = W / cols, ch = H / rows;
+    const s = Math.min(cw, ch) * 0.52;
+    ctx.fillStyle = '#000000';
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        ctx.save();
+        ctx.translate((c + 0.5) * cw, (r + 0.5) * ch);
+        ctx.rotate((((r + c) % 2) ? -5 : 5) * Math.PI / 180);
+        ctx.fillRect(-s / 2, -s / 2, s, s);
+        ctx.restore();
+      }
+    }
+    // Rahmen: zeigt der App (und dir), wo das Display endet
+    const m = Math.round(Math.min(W, H) * 0.012);
+    ctx.lineWidth = m;
+    ctx.strokeStyle = '#000000';
+    ctx.strokeRect(m / 2, m / 2, W - m, H - m);
+  }
+
+  function drawGray() {
+    const { W, H } = size();
+    const landscape = W >= H;
+    const n = GRAY.length;
+    for (let i = 0; i < n; i++) {
+      const v = GRAY[i];
+      ctx.fillStyle = `rgb(${v},${v},${v})`;
+      if (landscape) {
+        const x0 = Math.round(i * W / n), x1 = Math.round((i + 1) * W / n);
+        ctx.fillRect(x0, 0, x1 - x0, H);
+      } else {
+        const y0 = Math.round(i * H / n), y1 = Math.round((i + 1) * H / n);
+        ctx.fillRect(0, y0, W, y1 - y0);
+      }
+    }
+  }
+
+  function showHint(text) {
+    hint.textContent = text;
+    hint.style.opacity = '1';
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => { hint.style.opacity = '0'; }, 2500);
+  }
+
+  function draw() {
+    if (mode === 'sharp') drawSharp(); else if (mode === 'gray') drawGray();
+  }
+
+  async function open(m) {
+    mode = m;
+    intro.hidden = true;
+    stage.hidden = false;
+    draw();
+    showHint(m === 'sharp' ? 'Schärfe · tippen: Graustufen · doppelt tippen: zurück'
+                           : 'Graustufen · tippen: Schärfe · doppelt tippen: zurück');
+    try { if (!document.fullscreenElement && stage.requestFullscreen) await stage.requestFullscreen(); } catch (e) {}
+    try { if ('wakeLock' in navigator && !wake) wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+  }
+
+  function close() {
+    mode = null;
+    stage.hidden = true;
+    intro.hidden = false;
+    try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) {}
+  }
+
+  document.getElementById('b-sharp').addEventListener('click', () => open('sharp'));
+  document.getElementById('b-gray').addEventListener('click', () => open('gray'));
+
+  // Einmal tippen: Muster wechseln · doppelt tippen: zurück zur Anleitung
+  let tapTimer = 0;
+  stage.addEventListener('click', () => {
+    const now = Date.now();
+    if (now - lastTap < 320) {
+      clearTimeout(tapTimer);
+      lastTap = 0;
+      close();
+      return;
+    }
+    lastTap = now;
+    tapTimer = setTimeout(() => open(mode === 'sharp' ? 'gray' : 'sharp'), 330);
+  });
+
+  window.addEventListener('resize', draw);
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible' && mode && !wake) {
+      try { wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+    }
+  });
+})();
+</script>

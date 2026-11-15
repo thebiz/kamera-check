@@ -35,7 +35,11 @@ object RawSR {
     /** Geometrie: Ausschnitt mit Rand (x0, y0, rw, rh) und Zielausschnitt (cx, cy, cw, ch) in Sensorpixeln. */
     class Geo(val x0: Int, val y0: Int, val rw: Int, val rh: Int, val cx: Int, val cy: Int, val cw: Int, val ch: Int)
 
-    class Out(val y: FloatArray, val wo: Int, val ho: Int, val u: Float, val used: Int, val rawToYuv: FloatArray)
+    class Out(
+        val y: FloatArray, val wo: Int, val ho: Int, val u: Float, val used: Int, val rawToYuv: FloatArray,
+        /** Lineare Farbebenen R, G, B im Messrahmen (nur bei Kalibrierung), Größe boxW × boxH */
+        val planes: Array<FloatArray>? = null, val boxW: Int = 0, val boxH: Int = 0,
+    )
 
     private const val MAX_OUT_PIXELS = 8_400_000f
 
@@ -65,6 +69,8 @@ object RawSR {
         threads: Int,
         /** Gewicht je Bild (z. B. aus dem Lagesensor: verwackelt → klein), null = alle gleich */
         frameWeights: FloatArray? = null,
+        /** Kalibrierung: Messrahmen (x0, y0, x1, y1 als Anteil 0..1 des Ergebnisses) – dort werden die linearen Farbebenen aufgehoben */
+        keepBox: FloatArray? = null,
         progress: (String) -> Unit,
     ): Out {
         val w = g.rw
@@ -121,6 +127,11 @@ object RawSR {
         val prior = halfPlanes(ref, w, h, color, p, scale)
 
         val coef = floatArrayOf(0.25f, 0.5f, 0.25f)
+        val bx0 = ((keepBox?.get(0) ?: 0f) * wo).toInt().coerceIn(0, wo - 1)
+        val by0 = ((keepBox?.get(1) ?: 0f) * ho).toInt().coerceIn(0, ho - 1)
+        val bw = (((keepBox?.get(2) ?: 0f) * wo).toInt() - bx0).coerceIn(1, wo - bx0)
+        val bh = (((keepBox?.get(3) ?: 0f) * ho).toInt() - by0).coerceIn(1, ho - by0)
+        val planes = if (keepBox != null) Array(3) { FloatArray(bw * bh) } else null
         val sigmaRaw = floatArrayOf(0.42f, 0.28f, 0.42f)
         for (c in 0 until 3) {
             progress("RAW: verrechne ${"RGB"[c]} …")
@@ -145,6 +156,7 @@ object RawSR {
 
             // Normieren, Lücken aus der Vorlage
             val pl = prior[c]
+            val plane = planes?.get(c)
             val pw = 0.03f
             for (yy in 0 until ho) {
                 val sy = (yy + 0.5f) / u - 0.5f + g.cy - oy - g.y0
@@ -154,7 +166,11 @@ object RawSR {
                     val hx = (sx - 0.5f) / 2f
                     val pv = bilinearF(pl, hw, hh, hx, hy)
                     val i = yy * wo + xx
-                    lum[i] += coef[c] * (acc[i] + pw * pv) / (wt[i] + pw)
+                    val v = (acc[i] + pw * pv) / (wt[i] + pw)
+                    lum[i] += coef[c] * v
+                    if (plane != null && xx in bx0 until bx0 + bw && yy in by0 until by0 + bh) {
+                        plane[(yy - by0) * bw + (xx - bx0)] = v
+                    }
                 }
             }
         }
@@ -163,7 +179,7 @@ object RawSR {
         // ── 4. An das Kamerabild angleichen ──
         progress("RAW: gleiche Farben an …")
         val yOut = calibrate(lum, wo, ho, u, mergedY, g.cw, g.ch, acc, wt)
-        return Out(yOut, wo, ho, u, good.size, floatArrayOf(ox, oy))
+        return Out(yOut, wo, ho, u, good.size, floatArrayOf(ox, oy), planes, bw, bh)
     }
 
     // ───────────────────────── Bausteine ─────────────────────────
