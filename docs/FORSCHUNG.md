@@ -407,6 +407,18 @@ wirklich hochgerechneten Bild (Simulation: hochgerechnet ≈ 1,7, echte 50 MP �
 unscharfe 50 MP ≈ 2,2), plus Vergleichsbild der drei strukturreichsten Stellen.
 Über den Chat verschickte Bilder werden verkleinert – deshalb läuft die Prüfung in der App.
 
+**Korrektur (15.11.2026, 12:30):** Das vermeintliche 50-MP-Bild war ein **Fehlalarm**. Die Prüfung
+der Datei ergab 1920 × 1440: Der Treiber hatte einen Puffer in 8192 × 6144 angenommen, aber nur
+das kleine Ersatzbild hineingeschrieben; der Test hatte die gemeldete Größe nicht am Bildinhalt
+überprüft. Lehre: **jedes Ergebnis an der gespeicherten Datei nachmessen.**
+
+**Recherche (Community, XDA, Hersteller):** Kein bekannter Weg zu 50-MP-RAW am Poco X7 Pro ohne
+Root. Xiaomi steuert, welche fremden Apps mehr dürfen, über eine Freigabeliste in den
+Systemeigenschaften (`vendor.camera.aux.packagelist`, meist höchstens 4 App-Namen);
+ändern lässt sie sich nur mit Root. GCam-Ports brauchen ebenfalls Eingriffe in Systemdateien.
+Version 1.9.3 liest die lesbaren Kamera-Eigenschaften aus – stehen dort App-Namen, kann ein
+Testprogramm unter genau diesem Namen laufen.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -458,6 +470,7 @@ unscharfe 50 MP ≈ 2,2), plus Vergleichsbild der drei strukturreichsten Stellen
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.9.3 | Kamera-Freigaben im System lesen; Fehlalarm 50 MP korrigiert |
 | 1.9 | Erste 50-MP-Aufnahme in der eigenen App (versteckte Xiaomi-Größe + Remosaic); „Foto prüfen: echte 50 MP?“ |
 | 1.8.3 | 50-MP-Test absturzfest (Protokoll in Datei, abgestürzte Versuche werden übersprungen), Remosaic-Schalter einzeln |
 | 1.8.2 | 50-MP-Test Stufe 2: Remosaic- und Super-Resolution-Schalter von Xiaomi/MediaTek |

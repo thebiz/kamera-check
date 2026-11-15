@@ -184,6 +184,17 @@ class CheckActivity : Activity() {
         })
         root.addView(testOut)
 
+        // Freigabe-Listen im System lesen (welche App-Namen bekommen mehr?)
+        root.addView(Button(this).apply {
+            text = "Kamera-Freigaben im System lesen"
+            isAllCaps = false
+            setOnClickListener {
+                val r = "── Systemeigenschaften ──\n" + FullResTest.readProps()
+                synchronized(testLog) { testLog.setLength(0); testLog.append(r) }
+                testOut.text = r
+            }
+        })
+
         // Echte 50 MP oder hochgerechnet? Prüft ein Foto in Originalauflösung
         root.addView(Button(this).apply {
             text = "Foto prüfen: echte 50 MP?"

@@ -433,4 +433,43 @@ class FullResTest(private val a: Activity, private val sink: (String) -> Unit) {
 
     private fun largest(s: Array<Size>?): Size? = s?.maxByOrNull { it.width.toLong() * it.height }
     private fun mp(s: Size) = "%.1f MP (%d×%d)".format(s.width.toLong() * s.height / 1e6, s.width, s.height)
+
+    companion object {
+        /**
+         * Freigabe-Listen im System lesen (ohne Kamera): Xiaomi/MediaTek legen in Systemeigenschaften
+         * fest, welche App-Namen mehr dürfen (z. B. vendor.camera.aux.packagelist). Lesen dürfen Apps
+         * nicht alles – was gesperrt ist, kommt leer zurück.
+         */
+        fun readProps(): String {
+            val out = StringBuilder()
+            val keys = listOf(
+                "vendor.camera.aux.packagelist", "vendor.camera.aux.packagelist2", "persist.vendor.camera.privapp.list",
+                "persist.vendor.camera.auxswitch.packagelist", "ro.vendor.camera.aux.packagelist", "persist.camera.privapp.list",
+                "ro.product.mod_device", "ro.miui.ui.version.name", "ro.mi.os.version.name",
+            )
+            try {
+                val sp = Class.forName("android.os.SystemProperties")
+                val get = sp.getMethod("get", String::class.java)
+                for (k in keys) {
+                    val v = get.invoke(null, k) as String
+                    out.appendLine("$k = ${v.ifEmpty { "(leer oder gesperrt)" }}")
+                }
+            } catch (e: Throwable) {
+                out.appendLine("Direktes Lesen nicht möglich: ${e.javaClass.simpleName}")
+            }
+            try {
+                val p = Runtime.getRuntime().exec(arrayOf("getprop"))
+                val lines = p.inputStream.bufferedReader().readLines()
+                val hits = lines.filter { l ->
+                    val x = l.lowercase()
+                    listOf("camera", "packagelist", "remosaic", "mivi", "qcfa", "superres").any { x.contains(it) }
+                }
+                out.appendLine("\ngetprop: ${lines.size} Eigenschaften lesbar, davon ${hits.size} zur Kamera:")
+                for (h in hits.take(120)) out.appendLine(h)
+            } catch (e: Throwable) {
+                out.appendLine("getprop nicht möglich: ${e.javaClass.simpleName}")
+            }
+            return out.toString()
+        }
+    }
 }
