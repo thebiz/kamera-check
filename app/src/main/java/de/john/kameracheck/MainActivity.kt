@@ -1811,6 +1811,9 @@ class MainActivity : Activity() {
             if (m.edges >= 40) sig[ry][rx] = m.mean * k
         }
         val vals = sig.flatMap { it.toList() }.filter { !it.isNaN() }
+        var sx = r.sx * k
+        var sy = r.sy * k
+        var note2 = ""
         val note = if (vals.size < 2) "Gleichmäßigkeit: zu wenige Kanten zum Prüfen" else {
             val mn = vals.min()
             val mx = vals.max()
@@ -1820,10 +1823,20 @@ class MainActivity : Activity() {
                 for (ry in 0 until rows) for (rx in 0 until cols) if (sig[ry][rx] == mx) { wr = ry; wc = rx }
                 // Lage in aufrechter Ansicht benennen
                 val where = regionName(wc, wr, cols, rows, rotation)
+                // Tiefe im Bild (Johns Szene 15.11.: Schuhe vorn, Karton dahinter): Unscharfes liegt außerhalb der
+                // Schärfeebene – das lässt sich nicht zurückholen. Geschärft wird für die scharfe Stelle; die große
+                // Messung (5,5 px) hätte die scharfen Kanten mit extremen Säumen überzogen.
+                val cap = mn * 1.15f
+                if (max(sx, sy) > cap) {
+                    val f = cap / max(sx, sy)
+                    note2 = " → geschärft für die scharfe Stelle: ${fmt(sx * f)}/${fmt(sy * f)} px statt ${fmt(sx)}/${fmt(sy)} (Unscharfes liegt außerhalb der Schärfeebene)"
+                    sx *= f
+                    sy *= f
+                }
                 "Schärfe ungleichmäßig: $where unschärfer (${fmt(mn)} bis ${fmt(mx)} px)"
             }
         }
-        return BlurEstimate.Result(r.sx * k, r.sy * k, r.edges, r.fromText) to note
+        return BlurEstimate.Result(sx, sy, r.edges, r.fromText) to (note + note2)
     }
 
     /** Bereich (Spalte/Zeile im Sensorbild) als Lage im aufrecht gedrehten Foto benennen. */
@@ -2014,7 +2027,10 @@ class MainActivity : Activity() {
             val est = Dpir.noiseLevel(plane, w, h)
             // Untergrenze nur auf feinerem Raster: auf dem normalen Raster bremste sie (1.12.1–1.14) die KI aus –
             // 32 Bilder maßen weniger Rauschen, die KI rechnete aber trotzdem mit 2 und glättete nur (Test 15.11., 17:30)
-            val noise = if (grid > 1f) max(est * grid, NOISE_FLOOR * grid) else est
+            // Sicherung: bei großer Unschärfe verstärkt die Entfaltung enorm – Rauschen nie unter 0,6/255 je Pixel Unschärfe
+            // (Fehlschlag 15.11. abends: 3 px bei Rauschen 0,9 → Ringe überall). Für den guten Weg (≈ 1,4 px) ohne Wirkung.
+            val sigFloor = 0.6f / 255f * max(sx, sy) / max(1f, grid)
+            val noise = if (grid > 1f) max(est * grid, NOISE_FLOOR * grid) else max(est, sigFloor)
             if (c == 0) info += "Rauschen gemessen ${fmt(est * 255f)} · für die KI angesetzt ${fmt(noise * 255f)} (Stufen von 255)"
             val name = if (perColor) listOf("Rot", "Grün", "Blau")[c] + " " else ""
             val tc = SystemClock.elapsedRealtime()

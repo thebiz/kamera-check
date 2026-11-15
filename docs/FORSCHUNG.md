@@ -609,6 +609,21 @@ nur „was liegt vor was“.
 Außerdem: Der runde Griff der Vergleichslinie sitzt jetzt am unteren Rand (Johns Wunsch: die Bildmitte
 ist das Motiv).
 
+**Fehlschlag mit Tiefe im Bild (15.11.2026, 20 Uhr, Version 1.17):** ![Diagnose 1.17](diagnose_v1-17_tiefe.jpg)
+Szene mit Vorder- und Hintergrund (Schuhe auf Karton, weiße Flasche unscharf davor), 1,4× Zoom.
+Johns Urteil: „grauenhaft schlecht, extreme weiße Säume“. Das Diagnosebild zeigt: Kacheln 1–3 gut,
+5 (Physik) schon mit Säumen, 6 (DPIR) voller Ringe. Ursache – nicht die neuen Regler, sondern die
+Unschärfe-Messung: Die Gleichmäßigkeitsprüfung meldete 1 bis 5,6 px (unscharfe Bereiche liegen
+außerhalb der Schärfeebene), die Schriftmessung 5,5/4,9 px, begrenzt auf 3/3 px. Mit 3 px auf die
+*scharfen* Kanten (≈ 1 px) angewandt, schießt die Entfaltung weit über – und die KI rechnete dazu
+mit sehr wenig Rauschen (0,9), also fast ohne Bremse.
+**Version 1.17.1:** (1) Ist die Schärfe ungleichmäßig, wird für die **schärfste Stelle** geschärft
+(höchstens 1,15 × deren Wert) – Unscharfes außerhalb der Schärfeebene kann man ohnehin nicht
+zurückholen. (2) Sicherung in der KI: Rauschen nie unter 0,6/255 je Pixel Unschärfe – bei 1,4 px
+(guter Weg) ohne Wirkung, bei 3 px eine kräftige Bremse.
+Lehre: **Bei Tiefe im Bild gibt es nicht „die eine“ Unschärfe.** Langfristig: Unschärfe je Bildstelle
+aus Messung und Tiefenkarte.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -661,6 +676,7 @@ ist das Motiv).
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.17.1 | Bei Tiefe im Bild für die schärfste Stelle schärfen; Rausch-Sicherung bei großer Unschärfe |
 | 1.17 | Plastizität nach Tiefenkarte (MiDaS), 3D-Wackeln, Griff der Vergleichslinie unten; 1.16.1 gesichert |
 | 1.16.1 | Klarheit ohne glatten hellen Streifen an Kanten (weich gedeckelt, aufhellen enger), Start 20 % |
 | 1.16 | Regler „Klarheit“ im Viewer (kantenschonend, Mitteltöne), nach Johns Galerie-Test |
