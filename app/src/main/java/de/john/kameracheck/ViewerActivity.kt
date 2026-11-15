@@ -28,6 +28,12 @@ class ViewerActivity : Activity() {
     private lateinit var mixLabel: TextView
     private lateinit var seek: BigSlider
     private lateinit var saveBtn: TextView
+    private lateinit var clarityLabel: TextView
+
+    // Klarheit (Johns Wunsch nach dem Test in der Galerie): im Hintergrund rechnen, neuester Wert gewinnt
+    private val clarityLock = Object()
+    @Volatile private var clarityWanted = DEFAULT_CLARITY
+    private var clarityThread: Thread? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,6 +83,25 @@ class ViewerActivity : Activity() {
             onChange = { v -> setMix(v) }
         }
         panel.addView(seek, LinearLayout.LayoutParams(-1, -2))
+
+        clarityWanted = try {
+            getSharedPreferences("viewer", MODE_PRIVATE).getFloat("clarity", DEFAULT_CLARITY)
+        } catch (_: Throwable) { DEFAULT_CLARITY }
+        clarityLabel = TextView(this).apply {
+            setTextColor(FG)
+            textSize = 15f
+            setPadding(0, dp(8f), 0, 0)
+        }
+        showClarity(clarityWanted, false)
+        panel.addView(clarityLabel)
+        panel.addView(BigSlider(this).apply {
+            setValue(clarityWanted)
+            onChange = { v ->
+                showClarity(v, true)
+                getSharedPreferences("viewer", MODE_PRIVATE).edit().putFloat("clarity", v).apply()
+                synchronized(clarityLock) { clarityWanted = v; clarityLock.notifyAll() }
+            }
+        }, LinearLayout.LayoutParams(-1, -2))
         // Schnellvergleich an derselben Stelle: Echt ⇄ KI (Johns Wunsch)
         panel.addView(button("Echt ⇄ KI umschalten", false) {
             val v = if (compare.mix >= 0.5f) 0f else 1f
@@ -132,6 +157,52 @@ class ViewerActivity : Activity() {
             return
         }
         compare.setImages(normal, real, ki)
+        startClarity(real, ki)
+    }
+
+    private fun showClarity(v: Float, busy: Boolean) {
+        val pct = (v * 100).roundToInt()
+        clarityLabel.text = (if (pct == 0) "Klarheit: aus" else "Klarheit: $pct %") + if (busy) " · rechnet …" else ""
+    }
+
+    /** Klarheit für die rechte Seite (Echt und KI) – links bleibt das Normalbild unverändert zum Vergleich. */
+    private fun startClarity(real: Bitmap, ki: Bitmap) {
+        clarityThread = Thread {
+            try {
+                runOnUiThread { clarityLabel.text = "Klarheit: bereite vor …" }
+                val cr = Clarity(real)
+                val ck = Clarity(ki)
+                // zwei Puffer im Wechsel: in den einen wird gerechnet, der andere wird angezeigt
+                val bufs = Array(2) { arrayOf(
+                    Bitmap.createBitmap(cr.w, cr.h, Bitmap.Config.ARGB_8888),
+                    Bitmap.createBitmap(ck.w, ck.h, Bitmap.Config.ARGB_8888)) }
+                var cur = 0
+                var done = -1f
+                while (!Thread.currentThread().isInterrupted) {
+                    val v = synchronized(clarityLock) {
+                        while (clarityWanted == done) clarityLock.wait()
+                        clarityWanted
+                    }
+                    val b = bufs[cur]
+                    cr.apply(v, b[0])
+                    ck.apply(v, b[1])
+                    done = v
+                    cur = 1 - cur
+                    runOnUiThread {
+                        compare.setRight(b[0], b[1])
+                        showClarity(v, clarityWanted != v)
+                    }
+                }
+            } catch (_: InterruptedException) {
+            } catch (e: Throwable) {
+                runOnUiThread { clarityLabel.text = "Klarheit nicht verfügbar (${e.message})" }
+            }
+        }.also { it.start() }
+    }
+
+    override fun onDestroy() {
+        clarityThread?.interrupt()
+        super.onDestroy()
     }
 
     private fun setMix(v: Float) {
@@ -170,7 +241,8 @@ class ViewerActivity : Activity() {
             val ok = try {
                 val b = compare.renderMix()
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
-                rememberPhoto(this, saveToGallery(this, b, "zoom_${stamp}_KI-$pct"))
+                val cl = (clarityWanted * 100).roundToInt()
+                rememberPhoto(this, saveToGallery(this, b, "zoom_${stamp}_KI-$pct" + if (cl > 0) "_Klarheit-$cl" else ""))
                 b.recycle()
                 true
             } catch (_: Throwable) {
@@ -189,6 +261,8 @@ class ViewerActivity : Activity() {
         const val REAL = "letztes_mehrbild.jpg"
         const val KI = "letztes_ki.jpg"
         const val DEFAULT_MIX = 30
+        /** Klarheit beim ersten Öffnen: sanft (danach merkt sich der Viewer Johns Einstellung) */
+        const val DEFAULT_CLARITY = 0.3f
         /** KI-Anteil, mit dem die Ansicht startet (0, wenn Schrift erkannt wurde – dort erfindet die KI) */
         @Volatile var startMix = DEFAULT_MIX
         const val INFO = "letztes_info.txt"

@@ -566,6 +566,17 @@ hochwertiger, aber er erkennt verlorene Struktur sofort.
 nicht nur am Auslöser (Johns Wunsch – man schaut beim Fotografieren aufs Motiv). Vergleich A/B
 standardmäßig aus (bleibt im Menü „Mehr“ als 16 gegen 32 Bilder), Aufnahme wieder mit 16 Bildern.
 
+**Klarheit (Version 1.16):** John hat das fertige Foto in der Galerie mit dem Regler „Klarheit“
+bearbeitet – es wirkte sichtbar besser. Deutung: Unser Ergebnis ist bei mittelgroßen Strukturen
+(Kartonfaser, Buchstabenflächen) noch etwas zurückhaltend – „Schärfe zurückholen“ arbeitet bewusst
+nur im Bereich der gemessenen Unschärfe (1–2 px), Klarheit dagegen großflächig (Radius ≈ 1/60 der
+Bildseite). Nachgebaut: Grundbild per **Guided Filter** (He et al. 2010) auf Viertel-Auflösung –
+kantenschonend, folgt kräftigen Kanten (dort keine Säume) und glättet nur mittelstarke Struktur.
+Detail = Bild − Grundbild, verstärkt bis 1,5×, am stärksten in den Mitteltönen, nur Helligkeit.
+Im Viewer als eigener Regler „Klarheit“ (Start 30 %, merkt sich Johns Einstellung), wirkt auf die
+rechte Seite; links bleibt das Normalbild als Maßstab. „Mischung speichern“ speichert mit Klarheit.
+Hinweis zur Ehrlichkeit: Klarheit erzeugt keine neuen Details, sie macht vorhandene sichtbarer.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -618,6 +629,7 @@ standardmäßig aus (bleibt im Menü „Mehr“ als 16 gegen 32 Bilder), Aufnahm
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.16 | Regler „Klarheit“ im Viewer (kantenschonend, Mitteltöne), nach Johns Galerie-Test |
 | 1.15.1 | Knopf „In Galerie öffnen“ im Viewer, Vorschaubild lange drücken öffnet das Foto in der Galerie |
 | 1.15 | Fortschritt am Fokusrahmen, Vergleich standardmäßig aus; Bilanz: Grenze ist die Unschärfe der Kamera |
 | 1.14.1 | KI rechnet auf normalem Raster wieder mit dem gemessenen Rauschen (Untergrenze nur fürs feine Raster) |

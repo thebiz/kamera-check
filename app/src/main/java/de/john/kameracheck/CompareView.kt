@@ -71,6 +71,13 @@ class CompareView(ctx: Context) : View(ctx) {
         invalidate()
     }
 
+    /** Rechte Seite austauschen (z. B. mit Klarheit), Zoom und Ausschnitt bleiben */
+    fun setRight(r: Bitmap, k: Bitmap) {
+        real = r
+        ki = k
+        invalidate()
+    }
+
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) = fit()
 
     private fun fit() {
