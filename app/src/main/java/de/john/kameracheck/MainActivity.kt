@@ -488,6 +488,12 @@ class MainActivity : Activity() {
             clipToOutline = true
             visibility = View.INVISIBLE
             setOnClickListener { startActivity(Intent(this@MainActivity, ViewerActivity::class.java)) }
+            // lange drücken: fertiges Foto direkt in der Galerie (Johns Wunsch)
+            setOnLongClickListener {
+                val u = ViewerActivity.recallPhoto(this@MainActivity)
+                if (u != null) ViewerActivity.openInGallery(this@MainActivity, u) else showStatus("Noch kein Foto gespeichert")
+                true
+            }
         }
         shotRow.addView(thumb, LinearLayout.LayoutParams(dp(54f), dp(54f)))
         shutter = ShutterView(this).apply {
@@ -1655,7 +1661,7 @@ class MainActivity : Activity() {
                 }
                 sBmp.recycle()
                 k.recycle()
-                ViewerActivity.saveToGallery(this, mix, "zoom_${stamp}_${tag}")
+                ViewerActivity.rememberPhoto(this, ViewerActivity.saveToGallery(this, mix, "zoom_${stamp}_${tag}"))
                 // Galerie-Mischung am Ausschnitt: dieselbe Mischung aus Kachel 5 und 6
                 val t5 = diag.firstOrNull { it.first.startsWith("5") }?.second
                 val t6 = diag.firstOrNull { it.first.startsWith("6") }?.second
@@ -1729,7 +1735,7 @@ class MainActivity : Activity() {
         cacheJpeg(aS, ViewerActivity.NORMAL)
         cacheJpeg(aS, ViewerActivity.REAL)
         cacheJpeg(bS, ViewerActivity.KI)
-        ViewerActivity.saveToGallery(this, bS, "zoom_${stamp}_${tag}_B-alle")
+        ViewerActivity.rememberPhoto(this, ViewerActivity.saveToGallery(this, bS, "zoom_${stamp}_${tag}_B-alle"))
         ViewerActivity.startMix = 100
         val info = ArrayList<String>()
         info += "VERGLEICH · links = A (bisheriger Weg) · rechts: Regler 0 % = A, 100 % = B (alle Bilder)"
@@ -2994,7 +3000,7 @@ class MainActivity : Activity() {
             }
             sBmp.recycle()
             kiBmp.recycle()
-            ViewerActivity.saveToGallery(this, mix, "import_${stamp}_${fmt(z).replace(',', '-')}x")
+            ViewerActivity.rememberPhoto(this, ViewerActivity.saveToGallery(this, mix, "import_${stamp}_${fmt(z).replace(',', '-')}x"))
             val t4 = diag.firstOrNull { it.first.startsWith("4") }?.second
             val t5 = diag.firstOrNull { it.first.startsWith("5") }?.second
             if (t4 != null && t5 != null && galleryMix in 1..99) {

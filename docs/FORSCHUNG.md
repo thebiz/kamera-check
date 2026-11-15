@@ -618,6 +618,7 @@ standardmäßig aus (bleibt im Menü „Mehr“ als 16 gegen 32 Bilder), Aufnahm
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.15.1 | Knopf „In Galerie öffnen“ im Viewer, Vorschaubild lange drücken öffnet das Foto in der Galerie |
 | 1.15 | Fortschritt am Fokusrahmen, Vergleich standardmäßig aus; Bilanz: Grenze ist die Unschärfe der Kamera |
 | 1.14.1 | KI rechnet auf normalem Raster wieder mit dem gemessenen Rauschen (Untergrenze nur fürs feine Raster) |
 | 1.14 | Vergleich A/B: 16 gegen 32 Bilder derselben Serie (ist Rauschen der Hebel?) |

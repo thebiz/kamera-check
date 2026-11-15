@@ -84,17 +84,23 @@ class ViewerActivity : Activity() {
             setMix(v)
         }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8f) })
 
-        // Johns Wunsch: Diagnosebild ohne Umweg über die Galerie direkt in den Chat schicken
+        // Johns Wünsche: fertiges Foto direkt in der Galerie öffnen, Diagnosebild direkt teilen
+        val links = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        recallPhoto(this)?.let { u ->
+            links.addView(button("In Galerie öffnen", false) { openInGallery(this, u) },
+                LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(4f) })
+        }
         recallDiag(this)?.let { u ->
-            panel.addView(button("Diagnose teilen", false) {
+            links.addView(button("Diagnose teilen", false) {
                 val send = Intent(Intent.ACTION_SEND).apply {
                     type = "image/jpeg"
                     putExtra(Intent.EXTRA_STREAM, u)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 startActivity(Intent.createChooser(send, "Diagnose teilen"))
-            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8f) })
+            }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(4f) })
         }
+        if (links.childCount > 0) panel.addView(links, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8f) })
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -164,7 +170,7 @@ class ViewerActivity : Activity() {
             val ok = try {
                 val b = compare.renderMix()
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
-                saveToGallery(this, b, "zoom_${stamp}_KI-$pct")
+                rememberPhoto(this, saveToGallery(this, b, "zoom_${stamp}_KI-$pct"))
                 b.recycle()
                 true
             } catch (_: Throwable) {
@@ -192,6 +198,27 @@ class ViewerActivity : Activity() {
 
         /** Zuletzt gespeichertes Diagnose-/Vergleichsbild – zum direkten Teilen aus der Ansicht */
         @Volatile var lastDiag: Uri? = null
+
+        /** Zuletzt gespeichertes fertiges Foto (für „In Galerie öffnen“), auch über einen Neustart hinaus */
+        fun rememberPhoto(a: Activity, uri: Uri) {
+            a.getSharedPreferences("viewer", Activity.MODE_PRIVATE).edit().putString("lastPhoto", uri.toString()).apply()
+        }
+
+        fun recallPhoto(a: Activity): Uri? =
+            a.getSharedPreferences("viewer", Activity.MODE_PRIVATE).getString("lastPhoto", null)?.let { Uri.parse(it) }
+
+        /** Foto in der Galerie-App öffnen (dort teilen, bearbeiten, löschen) */
+        fun openInGallery(a: Activity, uri: Uri) {
+            val view = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "image/jpeg")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            try {
+                a.startActivity(view)
+            } catch (_: Throwable) {
+                android.widget.Toast.makeText(a, "Keine Galerie-App gefunden", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
 
         /** Merkt sich das Diagnosebild auch über einen Neustart der App hinaus */
         fun rememberDiag(a: Activity, uri: Uri) {
