@@ -74,8 +74,10 @@ class Result(
     /** Gemittelte Farbe (Ausschnitt mit Rand, halbe Auflösung) */
     val chroma: Frame,
 ) {
-    /** Vergleich: dieselbe Serie auf ein doppelt so feines Raster eingetragen (Handzittern füllt die Lücken) */
+    /** Vergleich A/B: die zweite Rechnung derselben Serie (feines Raster bzw. alle statt nur der ersten Bilder) */
     var fine: Result? = null
+    /** Raster dieses Ergebnisses gegenüber dem Ausschnitt (1 = gleich, 2 = doppelt so fein) */
+    var grid = 1f
 }
 
 object SuperRes {
@@ -149,6 +151,11 @@ object SuperRes {
         maxShift: Int = 0,
         /** > 1: zusätzlich auf ein so viel feineres Raster eintragen (→ [Result.fine]) */
         fineU: Int = 0,
+        /**
+         * > 0: Vergleich „mehr Bilder“: das Hauptergebnis nutzt nur das Referenzbild und die ersten
+         * (subset − 1) passenden Bilder, [Result.fine] alle passenden Bilder derselben Serie
+         */
+        subset: Int = 0,
         progress: (String) -> Unit,
     ): Result {
         val w = r.rw
@@ -198,7 +205,10 @@ object SuperRes {
         val ho = r.ch
         val acc = FloatArray(wo * ho)
         val wt = FloatArray(wo * ho)
-        val fu = if (fineU > 1) fineU else 0
+        val fu = if (fineU > 1) fineU else if (subset > 0) 1 else 0
+        // Vergleich „mehr Bilder“: welche Bilder ins Hauptergebnis dürfen
+        val inMain = HashSet<Int>()
+        if (subset > 0) good.sortedBy { it[3] }.take(subset - 1).forEach { inMain += it[3].toInt() }
         val fwo = wo * fu
         val fho = ho * fu
         val fAcc = if (fu > 0) FloatArray(fwo * fho) else null
@@ -223,7 +233,7 @@ object SuperRes {
             val field = fields[idx]!!
             val q = sharp[idx] / sharp[refIdx]
             val fw = (frameWeights?.getOrNull(idx) ?: 1f) * q * q * q * q
-            splat(f.y, field, fw, ref.y, r, u, acc, wt, wo, ho)
+            if (subset == 0 || idx in inMain) splat(f.y, field, fw, ref.y, r, u, acc, wt, wo, ho)
             if (fAcc != null) splat(f.y, field, fw, ref.y, r, fu, fAcc, fWt!!, fwo, fho)
             addChroma(f, s[0], s[1], cwh, chh, uAcc, vAcc, cWt)
             frames[idx] = null
@@ -253,7 +263,7 @@ object SuperRes {
         val px = IntArray(wo * ho)
         val merged = toBitmap(acc, avgFrame, r, u.toFloat(), wo, ho, px)
         val single = toBitmap(wt, ref, r, u.toFloat(), wo, ho, px)
-        val res = Result(merged, single, good.size + 1, total, refIdx, ref.y, acc, avgFrame)
+        val res = Result(merged, single, if (subset > 0) inMain.size + 1 else good.size + 1, total, refIdx, ref.y, acc, avgFrame)
         if (fAcc != null) {
             // feines Raster: dieselbe Regel, Lücken (kaum getroffene Stellen) füllt das Referenzbild
             for (oy in 0 until fho) {
@@ -265,8 +275,8 @@ object SuperRes {
                 }
             }
             val fMerged = toBitmap(fAcc, avgFrame, r, fu.toFloat(), fwo, fho)
-            val fSingle = Bitmap.createScaledBitmap(single, fwo, fho, true)
-            res.fine = Result(fMerged, fSingle, good.size + 1, total, refIdx, ref.y, fAcc, avgFrame)
+            val fSingle = if (fu == 1) single.copy(Bitmap.Config.ARGB_8888, false) else Bitmap.createScaledBitmap(single, fwo, fho, true)
+            res.fine = Result(fMerged, fSingle, good.size + 1, total, refIdx, ref.y, fAcc, avgFrame).also { it.grid = fu.toFloat() }
         }
         return res
     }

@@ -130,9 +130,9 @@ class MainActivity : Activity() {
      */
     private var ispZoomOn = true
     /**
-     * Vergleich A/B: eine Serie, zweimal gerechnet – A = bisheriger Weg (Kamera-Zoom + Mitteln),
-     * B = dieselben Bilder an ihrer genauen Position in ein doppelt so feines Raster eingetragen
-     * (Handzittern füllt die Lücken; bis 1.12.1 war B die RAW-Serie, die bei 10× klar verlor).
+     * Vergleich A/B: eine Serie, zweimal gerechnet – A = bisheriger Weg (die ersten 16 Bilder gemittelt),
+     * B = alle Bilder derselben Serie (weniger Rauschen → darf kräftiger entfalten?).
+     * Frühere B-Varianten: RAW-Super-Resolution (1.12) und feines Raster (1.13) – beide ohne Gewinn.
      * Beide bekommen „Schärfe zurückholen“; Viewer und Diagnosebild zeigen
      * sie nebeneinander. So muss sich jede Neuerung gegen den guten Weg beweisen (Johns Vorgabe).
      */
@@ -1282,7 +1282,7 @@ class MainActivity : Activity() {
         val rawBytes = region.rw.toLong() * region.rh * 2
         val count = when {
             calibBox != null -> 12
-            isp > 1f -> (YUV_BUDGET / (region.rw.toLong() * region.rh * 3 / 2)).toInt().coerceIn(6, 16)
+            isp > 1f -> (YUV_BUDGET / (region.rw.toLong() * region.rh * 3 / 2)).toInt().coerceIn(6, if (stage == 1) COMPARE_FRAMES else 16)
             withRaw -> (RAW_BUDGET / rawBytes).toInt().coerceIn(8, 30)
             z >= 2f -> 16
             else -> 8
@@ -1463,7 +1463,7 @@ class MainActivity : Activity() {
 
                 // 1. YUV-Serie ausrichten und mitteln (Farbe, Helligkeits-Referenz)
                 val yuvShake = if (!col.withRaw) shakeWeights(yuvKeys, col.results) else null
-                val res = pre ?: SuperRes.process(frames, r, yuvShake?.first, fineU = if (col.compareStage == 1) 2 else 0) { showStatus(it) }
+                val res = pre ?: SuperRes.process(frames, r, yuvShake?.first, subset = if (col.compareStage == 1) 16 else 0) { showStatus(it) }
 
                 // Diagnose: jeden Rechenschritt am selben Ausschnitt festhalten
                 val diag = ArrayList<Pair<String, Bitmap>>()
@@ -1480,7 +1480,7 @@ class MainActivity : Activity() {
                 var real: Bitmap = res.merged
                 var srNote = ""
                 var half = false
-                var gridU = if (pre != null) 2f else 1f
+                var gridU = pre?.grid ?: 1f
                 lastShakePx = 0f
                 val info = ArrayList<String>()
                 info += "${fmt(col.zoomAtShot)}× Zoom" + if (col.isp > 1f)
@@ -1522,7 +1522,7 @@ class MainActivity : Activity() {
                     calibMessage("RAW-Bilder waren nicht verfügbar – bitte nochmal auslösen.")
                     return
                 }
-                if (pre != null) info += "Feines Raster 2×: dieselben Bilder an ihrer genauen Position eingetragen (Handzittern)"
+                if (pre != null && pre.grid > 1f) info += "Feines Raster ${fmt(pre.grid)}×: dieselben Bilder an ihrer genauen Position eingetragen"
                 if (!half) {
                     info += "${res.used} von ${res.total} Bildern verrechnet, kachelweise ausgerichtet" +
                         (if (SuperRes.dropped > 0) " (${SuperRes.dropped} unscharf/verrutscht aussortiert)" else "")
@@ -1667,7 +1667,7 @@ class MainActivity : Activity() {
                     if (fine != null) {
                         compareA = CompareA(kCopy, diag.toList(), info.toList())
                         mix.recycle()
-                        showStatus("A fertig – rechne B (feines Raster) …")
+                        showStatus("A fertig – rechne B (alle Bilder) …")
                         col.compareStage = 2
                         job(fine)
                         return
@@ -1708,7 +1708,7 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Vergleich A/B zusammenführen: Viewer links/0 % = A (bisheriger Weg), 100 % = B (feines Raster),
+     * Vergleich A/B zusammenführen: Viewer links/0 % = A (16 Bilder), 100 % = B (alle Bilder),
      * ein gemeinsames Diagnosebild mit den entscheidenden Kacheln beider Wege.
      */
     private fun finishCompare(bImg: Bitmap, diagB: List<Pair<String, Bitmap>>, infoB: List<String>, stamp: String, tag: String) {
@@ -1723,23 +1723,23 @@ class MainActivity : Activity() {
         cacheJpeg(aS, ViewerActivity.NORMAL)
         cacheJpeg(aS, ViewerActivity.REAL)
         cacheJpeg(bS, ViewerActivity.KI)
-        ViewerActivity.saveToGallery(this, bS, "zoom_${stamp}_${tag}_B-fein")
+        ViewerActivity.saveToGallery(this, bS, "zoom_${stamp}_${tag}_B-alle")
         ViewerActivity.startMix = 100
         val info = ArrayList<String>()
-        info += "VERGLEICH · links = A (bisheriger Weg) · rechts: Regler 0 % = A, 100 % = B (feines Raster)"
+        info += "VERGLEICH · links = A (bisheriger Weg) · rechts: Regler 0 % = A, 100 % = B (alle Bilder)"
         info += "„Echt ⇄ KI umschalten“ springt rechts zwischen A und B"
-        info += "── A: Kamera-Zoom + Mitteln + Schärfe zurückholen (dieselben Bilder wie B) ──"
+        info += "── A: Kamera-Zoom, die ersten 16 Bilder gemittelt + Schärfe zurückholen ──"
         info += a.info
-        info += "── B: Kamera-Zoom + feines Raster 2× + Schärfe zurückholen ──"
+        info += "── B: dieselbe Serie, alle Bilder gemittelt + Schärfe zurückholen ──"
         info += infoB
         File(cacheDir, ViewerActivity.INFO).writeText(info.joinToString("\n"))
-        // Diagnosebild: Vorschau, A gemittelt, B feines Raster, B Physik, A Ergebnis, B Ergebnis
+        // Diagnosebild: Vorschau, A 16 Bilder, B alle Bilder, B Physik, A Ergebnis, B Ergebnis
         fun pick(list: List<Pair<String, Bitmap>>, prefix: String, label: String) =
             list.firstOrNull { it.first.startsWith(prefix) }?.let { label to it.second }
         val tiles = listOfNotNull(
             pick(a.tiles, "1", "Vorschau (Handy-Bildprozessor)"),
-            pick(a.tiles, "3", "A · Kamera-Zoom, gemittelt"),
-            pick(diagB, "3", "B · feines Raster 2×"),
+            pick(a.tiles, "3", "A · 16 Bilder gemittelt"),
+            pick(diagB, "3", "B · alle Bilder gemittelt"),
             pick(diagB, "5", "B · + Schärfe (Physik)"),
             pick(a.tiles, "6", "A · Ergebnis (KI)"),
             pick(diagB, "6", "B · Ergebnis (KI)"),
@@ -2201,7 +2201,7 @@ class MainActivity : Activity() {
         if (profile != null) m.menu.add(0, 2, 2, "Kalibrierung löschen")
         m.menu.add(0, 5, 3, if (diagOn) "Diagnosebild: an ✓" else "Diagnosebild: aus")
         m.menu.add(0, 6, 4, if (ispZoomOn) "Quelle: Kamera-Zoom ✓" else "Quelle: ganzes Sensorbild + RAW")
-        m.menu.add(0, 11, 5, if (compareOn) "Vergleich A/B (feines Raster): an ✓" else "Vergleich A/B: aus")
+        m.menu.add(0, 11, 5, if (compareOn) "Vergleich A/B (16 gegen ${COMPARE_FRAMES} Bilder): an ✓" else "Vergleich A/B: aus")
         m.menu.add(0, 7, 5, "Fotos importieren …")
         m.menu.add(0, 3, 6, "Kamera-Check")
         m.setOnMenuItemClickListener {
@@ -2229,7 +2229,7 @@ class MainActivity : Activity() {
                 11 -> {
                     compareOn = !compareOn
                     getPreferences(MODE_PRIVATE).edit().putBoolean("compare", compareOn).apply()
-                    showStatus(if (compareOn) "Vergleich an: jedes Foto ab 2× zweimal gerechnet – A bisher, B feines Raster" else "Vergleich aus")
+                    showStatus(if (compareOn) "Vergleich an: ab 2× ${COMPARE_FRAMES} Bilder – A rechnet mit 16, B mit allen" else "Vergleich aus")
                     status.postDelayed({ if (!busy) showStatus(null) }, 3000)
                 }
                 6 -> {
@@ -3126,6 +3126,8 @@ class MainActivity : Activity() {
         /** Bis zu diesem Zoom macht der Bildprozessor den Ausschnitt (In-Sensor-Zoom des 50-MP-Sensors) */
         private const val ISP_ZOOM = 2f
         private const val YUV_BUDGET = 150_000_000L
+        /** Vergleich A/B „mehr Bilder“: so viele nimmt die Serie auf, A nutzt davon 16 */
+        private const val COMPARE_FRAMES = 32
         private const val BG = 0xFF111111.toInt()
         private const val FG = 0xFFEDEDED.toInt()
         private const val MUTED = 0xFF8A8A8A.toInt()

@@ -530,6 +530,12 @@ und gegen die hilft nur Entfalten, und wie weit man entfalten kann, bestimmt das
 Nächste Hebel deshalb: mehr Licht pro Bild bzw. mehr Bilder (weniger Rauschen → kräftiger
 entfalten), und eine KI, die genau diese Kamera kennt.
 
+**Test „mehr Bilder“ (Version 1.14):** Wenn Rauschen begrenzt, wie kräftig entfaltet werden darf,
+müssen mehr Bilder schärfere Ergebnisse geben. Fairer Test: Die Serie nimmt jetzt 32 Bilder auf.
+A rechnet mit dem Referenzbild und den ersten 15 passenden Bildern (16, wie bisher), B mit allen –
+gleiche Ausrichtung, gleiches Referenzbild, gleiche Rechenkette. Erwartung bei reinem Rauschen:
+Rauschen sinkt um den Faktor √2 ≈ 1,4. Das Diagnosebild nennt „Rauschen gemessen“ für A und B.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -582,6 +588,7 @@ entfalten), und eine KI, die genau diese Kamera kennt.
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.14 | Vergleich A/B: 16 gegen 32 Bilder derselben Serie (ist Rauschen der Hebel?) |
 | 1.13.1 | Absturz in B behoben (Vorschau-Kachel doppelt benutzt), „Diagnose teilen“ merkt sich das Bild auch nach Neustart |
 | 1.13 | Vergleich A/B neu: dieselbe Kamera-Zoom-Serie gemittelt (A) gegen feines Raster 2× (B) |
 | 1.12.1 | Gittermuster in B behoben (Rausch-Untergrenze für die KI), Knopf „Diagnose teilen“ |
