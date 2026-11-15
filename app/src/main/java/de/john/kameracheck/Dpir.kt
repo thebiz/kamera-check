@@ -31,7 +31,11 @@ object Dpir {
     const val INNER = T - 2 * PAD
     const val ITERS = 3
 
-    class Out(val y: FloatArray, val done: Int, val total: Int)
+    /** done = gerechnete Kacheln, flat = ohne Struktur übersprungen (dort gibt es nichts zu holen) */
+    class Out(val y: FloatArray, val done: Int, val total: Int, val flat: Int = 0)
+
+    /** Kacheln mit weniger Helligkeitsschwankung (Standardabweichung, 0..1) gelten als flach */
+    const val FLAT_STD = 0.012f
 
     fun run(
         y: FloatArray, w: Int, h: Int,
@@ -54,14 +58,23 @@ object Dpir {
         }
         val t0 = System.currentTimeMillis()
         var done = 0
+        var flat = 0
+        var computed = 0
         val tile = FloatArray(T * T)
         for (k in order) {
-            if (done > 0) {
-                val per = (System.currentTimeMillis() - t0) / done
+            if (computed > 0) {
+                val per = (System.currentTimeMillis() - t0) / computed
                 if (System.currentTimeMillis() - t0 + per > budgetMs) break
             }
             val tx = (k % nx) * INNER
             val ty = (k / nx) * INNER
+            // flache Kacheln (Himmel, Wand) überspringen: kein Detail, nur Zeit
+            if (std(y, w, h, tx, ty) < FLAT_STD) {
+                flat++
+                done++
+                progress(done, nx * ny)
+                continue
+            }
             // Kachel mit echtem Umfeld; am Bildrand gespiegelt
             for (j in 0 until T) {
                 val sy = mirror(ty - PAD + j, h)
@@ -73,9 +86,23 @@ object Dpir {
                 out[(ty + j) * w + tx + i] = r[(PAD + j) * T + PAD + i]
             }
             done++
+            computed++
             progress(done, nx * ny)
         }
-        return Out(out, done, nx * ny)
+        return Out(out, done, nx * ny, flat)
+    }
+
+    private fun std(y: FloatArray, w: Int, h: Int, tx: Int, ty: Int): Float {
+        var s = 0.0
+        var s2 = 0.0
+        var n = 0
+        for (j in ty until min(h, ty + INNER) step 2) for (i in tx until min(w, tx + INNER) step 2) {
+            val v = y[j * w + i].toDouble()
+            s += v; s2 += v * v; n++
+        }
+        if (n == 0) return 0f
+        val m = s / n
+        return sqrt(max(0.0, s2 / n - m * m)).toFloat()
     }
 
     private fun mirror(i: Int, n: Int): Int {

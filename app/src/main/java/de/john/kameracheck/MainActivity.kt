@@ -53,6 +53,9 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
@@ -1767,6 +1770,87 @@ class MainActivity : Activity() {
     }
 
     /**
+     * Unschärfe je Farbe relativ zur Helligkeit, gemessen an Kanten in der Bildmitte (max. 1024²).
+     * null = zu wenige Kanten.
+     */
+    private fun colorBlurFactors(px: IntArray, w: Int, h: Int): FloatArray? {
+        val cw = min(w, 1024)
+        val chh = min(h, 1024)
+        val x0 = (w - cw) / 2
+        val y0 = (h - chh) / 2
+        fun plane(sel: (Int) -> Float) = FloatArray(cw * chh) { i -> sel(px[(y0 + i / cw) * w + x0 + i % cw]) }
+        fun norm(a: FloatArray): FloatArray {
+            val s = a.copyOf().also { it.sort() }
+            val lo = s[(s.size * 0.01).toInt()]
+            val hi = s[min(s.size - 1, (s.size * 0.99).toInt())]
+            val span = max(1e-3f, hi - lo)
+            return FloatArray(a.size) { ((a[it] - lo) / span).coerceIn(0f, 1.2f) }
+        }
+        val planes = listOf(
+            plane { ((it shr 16) and 255) / 255f }, plane { ((it shr 8) and 255) / 255f }, plane { (it and 255) / 255f },
+            plane { (((it shr 16) and 255) * 0.299f + ((it shr 8) and 255) * 0.587f + (it and 255) * 0.114f) / 255f },
+        )
+        val m = planes.map { BlurEstimate.measure(norm(it), cw, chh) }
+        if (m.any { it.edges < 60 }) return null
+        val l = (m[3].sx + m[3].sy) / 2f
+        return FloatArray(3) { ((m[it].sx + m[it].sy) / 2f / max(0.1f, l)).coerceIn(0.6f, 1.6f) }
+    }
+
+    /**
+     * Vergleich „nur nachgeschärft“: klassisches Nachschärfen (Unscharf-Maskieren) des Originals,
+     * so stark eingestellt, dass die Kanten genauso kräftig sind wie im KI-Ergebnis – dann zeigt der
+     * Vergleich, ob DPIR echte Details holt oder nur kräftiger schärft. Arbeitet auf dem Diagnose-Ausschnitt.
+     */
+    private fun matchedSharpen(orig: Bitmap, target: Bitmap, r: FloatArray, sigma: Float): Pair<Bitmap, Float> {
+        fun crop(b: Bitmap): Bitmap {
+            val x0 = (r[0] * b.width).toInt().coerceIn(0, b.width - 2)
+            val y0 = (r[1] * b.height).toInt().coerceIn(0, b.height - 2)
+            val w = ((r[2] - r[0]) * b.width).toInt().coerceIn(2, b.width - x0)
+            val h = ((r[3] - r[1]) * b.height).toInt().coerceIn(2, b.height - y0)
+            return Bitmap.createBitmap(b, x0, y0, w, h)
+        }
+        val o = crop(orig)
+        val t = Bitmap.createScaledBitmap(crop(target), o.width, o.height, true)
+        val w = o.width
+        val h = o.height
+        val op = IntArray(w * h).also { o.getPixels(it, 0, w, 0, 0, w, h) }
+        val tp = IntArray(w * h).also { t.getPixels(it, 0, w, 0, 0, w, h) }
+        val lum = { p: Int -> ((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f }
+        val yo = FloatArray(w * h) { lum(op[it]) }
+        val yt = FloatArray(w * h) { lum(tp[it]) }
+        // Gauß-Weichzeichnung (getrennt) für die Maske
+        val rad = max(1, ceil(3 * sigma).toInt())
+        val k = FloatArray(2 * rad + 1) { exp(-((it - rad) * (it - rad)) / (2f * sigma * sigma)) }.let { a -> val sm = a.sum(); FloatArray(a.size) { a[it] / sm } }
+        val tmp = FloatArray(w * h)
+        val bl = FloatArray(w * h)
+        for (j in 0 until h) for (i in 0 until w) { var a = 0f; for (q in -rad..rad) a += k[q + rad] * yo[j * w + (i + q).coerceIn(0, w - 1)]; tmp[j * w + i] = a }
+        for (j in 0 until h) for (i in 0 until w) { var a = 0f; for (q in -rad..rad) a += k[q + rad] * tmp[(j + q).coerceIn(0, h - 1) * w + i]; bl[j * w + i] = a }
+        fun grad(a: FloatArray): Double {
+            var s = 0.0
+            for (j in 1 until h - 1) for (i in 1 until w - 1) { val c = j * w + i; s += abs(a[c + 1] - a[c - 1]) + abs(a[c + w] - a[c - w]) }
+            return s
+        }
+        val goal = grad(yt)
+        var best = 0f
+        var bestD = Double.MAX_VALUE
+        for (amt in listOf(0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 2.5f, 3f, 4f)) {
+            val ys = FloatArray(w * h) { (yo[it] + amt * (yo[it] - bl[it])).coerceIn(0f, 255f) }
+            val d = abs(grad(ys) - goal)
+            if (d < bestD) { bestD = d; best = amt }
+        }
+        val out = IntArray(w * h) { i ->
+            val d = best * (yo[i] - bl[i])
+            val p = op[i]
+            val rr = (((p shr 16) and 255) + d).roundToInt().coerceIn(0, 255)
+            val gg = (((p shr 8) and 255) + d).roundToInt().coerceIn(0, 255)
+            val bb = ((p and 255) + d).roundToInt().coerceIn(0, 255)
+            (0xFF shl 24) or (rr shl 16) or (gg shl 8) or bb
+        }
+        t.recycle()
+        return Bitmap.createBitmap(out, w, h, Bitmap.Config.ARGB_8888) to best
+    }
+
+    /**
      * KI-Entschärfen mit bekannter Unschärfe (DPIR) auf der Helligkeit; Farbe vom Original.
      * base = physikalisch entschärftes Bild für Kacheln, die das Zeitbudget nicht mehr schafft.
      * Gibt null zurück, wenn das Modell nicht verfügbar ist.
@@ -1787,32 +1871,65 @@ class MainActivity : Activity() {
         val bpx = IntArray(w * h)
         src.getPixels(px, 0, w, 0, 0, w, h)
         base.getPixels(bpx, 0, w, 0, 0, w, h)
+        val ch = { p: Int, c: Int -> ((p shr (16 - 8 * c)) and 255) / 255f }
         val lum = { p: Int -> (((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f) / 255f }
         val y = FloatArray(w * h) { lum(px[it]) }
-        val yb = FloatArray(w * h) { lum(bpx[it]) }
-        val noise = Dpir.noiseLevel(y, w, h)
         val t0 = SystemClock.elapsedRealtime()
-        val sig: (Int, Int) -> FloatArray = { x, yy ->
-            val s = sigmaAt?.invoke(x, yy) ?: floatArrayOf(sx, sy)
-            floatArrayOf(s[0].coerceIn(0.4f, 3f), s[1].coerceIn(0.4f, 3f))
+        val budget = if (strongOn) 600_000L else 300_000L
+
+        // Unschärfe je Farbe am Bild selbst messen (Bildmitte): Objektive bilden R, G, B unterschiedlich scharf ab
+        val fac = colorBlurFactors(px, w, h)
+        val perColor = fac != null && fac.any { abs(it - 1f) > 0.15f }
+        if (fac != null) info += "Unschärfe je Farbe (relativ): R ${fmt(fac[0])} · G ${fmt(fac[1])} · B ${fmt(fac[2])}" +
+            if (perColor) " → Farben werden getrennt zurückgerechnet" else " → ähnlich genug, gemeinsam gerechnet"
+
+        val sigFor = { f: Float ->
+            { x: Int, yy: Int ->
+                val s = sigmaAt?.invoke(x, yy) ?: floatArrayOf(sx, sy)
+                floatArrayOf((s[0] * f).coerceIn(0.4f, 3f), (s[1] * f).coerceIn(0.4f, 3f))
+            }
         }
-        val budget = if (strongOn) 300_000L else 120_000L
-        val out = Dpir.run(y, w, h, sig, noise, yb, budget, { t, s -> net.denoise(t, s) }) { done, total ->
-            val per = (SystemClock.elapsedRealtime() - t0) / max(1, done)
-            val left = (total - done) * per / 1000
-            showStatus("KI-Entschärfen … $done/$total" + if (left >= 10) " · noch ca. ${min(left, (budget - (SystemClock.elapsedRealtime() - t0)) / 1000)} s" else "")
+        val passes = if (perColor) 3 else 1
+        var done = 0
+        var total = 0
+        var flat = 0
+        val outPlanes = Array(passes) { c ->
+            val plane = if (perColor) FloatArray(w * h) { ch(px[it], c) } else y
+            val fb = if (perColor) FloatArray(w * h) { ch(bpx[it], c) } else FloatArray(w * h) { lum(bpx[it]) }
+            val noise = Dpir.noiseLevel(plane, w, h)
+            val name = if (perColor) listOf("Rot", "Grün", "Blau")[c] + " " else ""
+            val tc = SystemClock.elapsedRealtime()
+            val o = Dpir.run(plane, w, h, sigFor(if (perColor) fac!![c] else 1f), noise, fb, budget / passes, { t, sg -> net.denoise(t, sg) }) { d, tot ->
+                val per = (SystemClock.elapsedRealtime() - tc) / max(1, d)
+                val left = (tot - d) * per / 1000
+                showStatus("KI-Entschärfen $name… $d/$tot" + if (left >= 10) " · noch ca. $left s" else "")
+            }
+            if (c == 0) { total = o.total; flat = o.flat }
+            done += o.done
+            o.y
         }
         for (i in px.indices) {
-            val d = (out.y[i] - y[i]) * 255f
             val p = px[i]
-            val r = (((p shr 16) and 255) + d).roundToInt().coerceIn(0, 255)
-            val g = (((p shr 8) and 255) + d).roundToInt().coerceIn(0, 255)
-            val bl = ((p and 255) + d).roundToInt().coerceIn(0, 255)
+            val r: Int
+            val g: Int
+            val bl: Int
+            if (perColor) {
+                r = (outPlanes[0][i] * 255f).roundToInt().coerceIn(0, 255)
+                g = (outPlanes[1][i] * 255f).roundToInt().coerceIn(0, 255)
+                bl = (outPlanes[2][i] * 255f).roundToInt().coerceIn(0, 255)
+            } else {
+                val d = (outPlanes[0][i] - y[i]) * 255f
+                r = (((p shr 16) and 255) + d).roundToInt().coerceIn(0, 255)
+                g = (((p shr 8) and 255) + d).roundToInt().coerceIn(0, 255)
+                bl = ((p and 255) + d).roundToInt().coerceIn(0, 255)
+            }
             px[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or bl
         }
-        info += "KI-Entschärfen (DPIR, Unschärfe bekannt, ${net.backend}): ${out.done} von ${out.total} Kacheln" +
-            (if (out.done < out.total) " (Mitte zuerst, Rest physikalisch)" else "") +
-            " · Rauschen ${fmt(noise * 255)}/255 · ${(SystemClock.elapsedRealtime() - t0) / 1000} s"
+        val doneAvg = done / passes
+        info += "KI-Entschärfen (DPIR, Unschärfe bekannt, ${net.backend}): $doneAvg von $total Kacheln" +
+            (if (flat > 0) " ($flat flach übersprungen)" else "") +
+            (if (doneAvg < total) " · Rest physikalisch (Zeit)" else " · vollständig") +
+            " · ${(SystemClock.elapsedRealtime() - t0) / 1000} s"
         return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
     }
 
@@ -2450,6 +2567,11 @@ class MainActivity : Activity() {
             val kiBmp = if (kiRaw.width != kw || kiRaw.height != kh)
                 Bitmap.createScaledBitmap(kiRaw, kw, kh, true).also { if (it !== kiRaw) kiRaw.recycle() } else kiRaw
             keep(if (dp != null) "5 KI-Entschärfen (DPIR)" else "5 KI pur", kiBmp)
+            // Gegenprobe: Original nur klassisch nachgeschärft, genauso kräftig wie DPIR
+            if (diagOn && dp != null) try {
+                val (cmp, amt) = matchedSharpen(res.single, kiBmp, dr, max(sx, sy))
+                diag += "6 Gegenprobe: nur nachgeschärft (Stärke ${fmt(amt)})" to diagScale(cmp)
+            } catch (_: Throwable) {}
             val galleryMix = if (dp != null) 100 else if (blur.fromText) 0 else ViewerActivity.DEFAULT_MIX
             ViewerActivity.startMix = galleryMix
             if (galleryMix == 0) info += "Schrift erkannt → Galerie ohne KI (Regler im Viewer bleibt)"
@@ -2475,7 +2597,7 @@ class MainActivity : Activity() {
             ViewerActivity.saveToGallery(this, mix, "import_${stamp}_${fmt(z).replace(',', '-')}x")
             val t4 = diag.firstOrNull { it.first.startsWith("4") }?.second
             val t5 = diag.firstOrNull { it.first.startsWith("5") }?.second
-            if (t4 != null && t5 != null) {
+            if (t4 != null && t5 != null && galleryMix in 1..99) {
                 val m6 = t4.copy(Bitmap.Config.ARGB_8888, true)
                 android.graphics.Canvas(m6).drawBitmap(Bitmap.createScaledBitmap(t5, m6.width, m6.height, true), 0f, 0f,
                     android.graphics.Paint().apply { alpha = galleryMix * 255 / 100 })
