@@ -36,6 +36,22 @@ class FocusView(ctx: Context) : View(ctx) {
             invalidate()
         }
 
+    /** Aufnahme läuft: Fortschritt 0..1 und Text („12/32“) direkt am Motiv – Johns Wunsch; < 0 = keine Aufnahme */
+    var capture = -1f
+        private set
+    private var captureText = ""
+
+    fun setCapture(done: Int, total: Int) {
+        capture = if (total > 0) done.toFloat() / total else -1f
+        captureText = "$done/$total"
+        invalidate()
+    }
+
+    fun clearCapture() {
+        capture = -1f
+        invalidate()
+    }
+
     private val d = resources.displayMetrics.density
     val size = 76f * d
 
@@ -77,7 +93,32 @@ class FocusView(ctx: Context) : View(ctx) {
 
     fun contains(x: Float, y: Float) = shown && kotlin.math.abs(x - fx) < size * 0.75f && kotlin.math.abs(y - fy) < size * 0.75f
 
+    private val barBg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 4f * d
+        strokeCap = Paint.Cap.ROUND
+        color = 0x88000000.toInt()
+    }
+    private val barFg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 4f * d
+        strokeCap = Paint.Cap.ROUND
+        color = 0xFFFFFFFF.toInt()
+    }
+
     override fun onDraw(c: Canvas) {
+        if (capture >= 0f) {
+            // Fortschritt am Motiv: Balken unter dem Rahmen (bzw. Bildmitte, wenn kein Rahmen da ist)
+            val cx = if (shown) fx else width / 2f
+            val cy = if (shown) fy else height / 2f
+            val y = cy + size / 2 + 14f * d
+            val half = size / 2
+            c.drawLine(cx - half, y, cx + half, y, barBg)
+            c.drawLine(cx - half, y, cx - half + 2 * half * capture.coerceIn(0f, 1f), y, barFg)
+            text.color = 0xFFFFFFFF.toInt()
+            c.drawText(captureText, cx, y + 18f * d, text)
+            if (!shown) return
+        }
         if (!shown) return
         val col = when (state) {
             State.SHARP -> 0xFF5BE38A.toInt()
@@ -109,6 +150,6 @@ class FocusView(ctx: Context) : View(ctx) {
             state == State.SHARP -> "scharf"
             else -> ""
         }
-        if (label.isNotEmpty()) c.drawText(label, fx, r.bottom + 18f * d, text)
+        if (label.isNotEmpty() && capture < 0f) c.drawText(label, fx, r.bottom + 18f * d, text)
     }
 }

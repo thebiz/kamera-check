@@ -136,7 +136,7 @@ class MainActivity : Activity() {
      * Beide bekommen „Schärfe zurückholen“; Viewer und Diagnosebild zeigen
      * sie nebeneinander. So muss sich jede Neuerung gegen den guten Weg beweisen (Johns Vorgabe).
      */
-    private var compareOn = true
+    private var compareOn = false
     private class CompareA(val img: Bitmap, val tiles: List<Pair<String, Bitmap>>, val info: List<String>)
     @Volatile private var compareA: CompareA? = null
     private lateinit var calibOverlay: CalibOverlay
@@ -226,7 +226,7 @@ class MainActivity : Activity() {
         profile50 = readProfile(PROFILE50_FILE)
         diagOn = getPreferences(MODE_PRIVATE).getBoolean("diag", true)
         ispZoomOn = getPreferences(MODE_PRIVATE).getBoolean("ispzoom", true)
-        compareOn = getPreferences(MODE_PRIVATE).getBoolean("compare", true)
+        compareOn = getPreferences(MODE_PRIVATE).getBoolean("compare2", false)
         strongOn = getSharedPreferences("ki", MODE_PRIVATE).getBoolean("strong_on", false)
         updateChips()
 
@@ -1375,7 +1375,12 @@ class MainActivity : Activity() {
 
     private fun onBurstImage(col: Collector) {
         val n = col.complete()
-        runOnUiThread { if (shutter.mode == ShutterView.Mode.CAPTURING) shutter.progress = n.toFloat() / col.count }
+        runOnUiThread {
+            if (shutter.mode == ShutterView.Mode.CAPTURING) {
+                shutter.progress = n.toFloat() / col.count
+                focusView.setCapture(n, col.count)
+            }
+        }
         if (col.finished()) finishBurst(col)
     }
 
@@ -1419,7 +1424,7 @@ class MainActivity : Activity() {
         busy = false
         startPreview()
         showHold(null)
-        runOnUiThread { shutter.mode = ShutterView.Mode.IDLE }
+        runOnUiThread { shutter.mode = ShutterView.Mode.IDLE; focusView.clearCapture() }
         showStatus(msg)
         status.postDelayed({ showStatus(null) }, 2500)
     }
@@ -1443,6 +1448,7 @@ class MainActivity : Activity() {
 
         // Aufnahme fertig: kurz vibrieren, Handy darf bewegt werden
         runOnUiThread {
+            focusView.clearCapture()
             shutter.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
             shutter.mode = ShutterView.Mode.PROCESSING
             if (col.calibBox != null) {
@@ -2230,7 +2236,7 @@ class MainActivity : Activity() {
                 7 -> pickPhotos()
                 11 -> {
                     compareOn = !compareOn
-                    getPreferences(MODE_PRIVATE).edit().putBoolean("compare", compareOn).apply()
+                    getPreferences(MODE_PRIVATE).edit().putBoolean("compare2", compareOn).apply()
                     showStatus(if (compareOn) "Vergleich an: ab 2× ${COMPARE_FRAMES} Bilder – A rechnet mit 16, B mit allen" else "Vergleich aus")
                     status.postDelayed({ if (!busy) showStatus(null) }, 3000)
                 }

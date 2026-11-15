@@ -546,6 +546,26 @@ weicher gemacht (Johns Bemerkung beim 1.13-Test: „das normale Bild ist jetzt e
 **Version 1.14.1:** Untergrenze nur noch auf feinerem Raster; auf dem normalen Raster rechnet die
 KI wieder mit dem gemessenen Rauschen. Gleicher Test noch einmal.
 
+**Ergebnis 16 gegen 32 Bilder, richtig gerechnet (15.11.2026, 17:43, Version 1.14.1):** ![Vergleich A/B 1.14.1](vergleich_ab_v1-14-1.jpg)
+Jetzt rechnet die KI mit dem gemessenen Rauschen (A und B: 1 von 255) – und beide messen *gleich*
+viel. Johns Urteil: B ruhiger, aber Karton und Schrift weicher. Deutung: Was die Messung als
+„Rauschen“ sieht, ist bei dieser Helligkeit überwiegend echte Kartonstruktur, nicht Zufallsrauschen –
+das Rauschen ist schon mit 16 Bildern so klein, dass es nicht mehr bremst. Die Bilder 17–32 sind
+später aufgenommen, das Handy ist weiter gewandert; ihre winzigen Restfehler beim Ausrichten
+glätten Struktur weg. **Mehr Bilder bringen hier keine Schärfe – 16 bleibt richtig.**
+
+**Bilanz der drei Versuche vom 15.11.:** RAW-Super-Resolution, feines Raster, mehr Bilder – keiner
+schlägt den bisherigen Weg. Zusammen zeigen sie, wo die Grenze liegt: **eine Unschärfe von rund
+1,4–1,6 px, die schon im Bild der Kamera steckt** (Objektiv, Sensor, Entmosaiken), bei sehr wenig
+Rauschen. Weder mehr Raster noch mehr Bilder holen da etwas heraus; nur ein besseres Wissen über
+genau diese Unschärfe – also eine KI, die mit Bildpaaren *dieser* Kamera nachtrainiert wird.
+Johns Auge war bei jedem Versuch das zuverlässigste Messgerät: Glatt wirkt auf den ersten Blick
+hochwertiger, aber er erkennt verlorene Struktur sofort.
+
+**Version 1.15:** Aufnahme-Fortschritt („12/16“ und Balken) direkt unter dem Fokusrahmen am Motiv,
+nicht nur am Auslöser (Johns Wunsch – man schaut beim Fotografieren aufs Motiv). Vergleich A/B
+standardmäßig aus (bleibt im Menü „Mehr“ als 16 gegen 32 Bilder), Aufnahme wieder mit 16 Bildern.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -598,6 +618,7 @@ KI wieder mit dem gemessenen Rauschen. Gleicher Test noch einmal.
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.15 | Fortschritt am Fokusrahmen, Vergleich standardmäßig aus; Bilanz: Grenze ist die Unschärfe der Kamera |
 | 1.14.1 | KI rechnet auf normalem Raster wieder mit dem gemessenen Rauschen (Untergrenze nur fürs feine Raster) |
 | 1.14 | Vergleich A/B: 16 gegen 32 Bilder derselben Serie (ist Rauschen der Hebel?) |
 | 1.13.1 | Absturz in B behoben (Vorschau-Kachel doppelt benutzt), „Diagnose teilen“ merkt sich das Bild auch nach Neustart |
