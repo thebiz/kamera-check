@@ -53,7 +53,20 @@ class FocusView(ctx: Context) : View(ctx) {
     }
 
     private val d = resources.displayMetrics.density
-    val size = 76f * d
+    /** Rahmengröße – mit zwei Fingern im Rahmen veränderbar (Johns Wunsch 1.19) */
+    var size = 76f * d
+        set(v) { field = v.coerceIn(MIN_DP * d, MAX_DP * d); invalidate() }
+    val minSize get() = MIN_DP * d
+    val maxSize get() = MAX_DP * d
+
+    /** Zoom über das Kamera-Maximum hinaus: Anteil der Vorschau, der aufgenommen wird (1 = alles) */
+    var cropFrac = 1f
+        set(v) { field = v; invalidate() }
+    var cropLabel = ""
+    private val cropPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = 0xDDFFFFFF.toInt()
+    }
 
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -107,6 +120,16 @@ class FocusView(ctx: Context) : View(ctx) {
     }
 
     override fun onDraw(c: Canvas) {
+        if (cropFrac < 0.999f) {
+            // Ausschnitt, der bei Zoom über 10× wirklich aufgenommen wird
+            cropPaint.strokeWidth = 1.5f * d
+            cropPaint.pathEffect = dash
+            val w2 = width * cropFrac / 2f
+            val h2 = height * cropFrac / 2f
+            c.drawRect(width / 2f - w2, height / 2f - h2, width / 2f + w2, height / 2f + h2, cropPaint)
+            text.color = 0xDDFFFFFF.toInt()
+            c.drawText(cropLabel, width / 2f, height / 2f - h2 - 8f * d, text)
+        }
         if (capture >= 0f) {
             // Fortschritt am Motiv: Balken unter dem Rahmen (bzw. Bildmitte, wenn kein Rahmen da ist)
             val cx = if (shown) fx else width / 2f
@@ -151,5 +174,10 @@ class FocusView(ctx: Context) : View(ctx) {
             else -> ""
         }
         if (label.isNotEmpty() && capture < 0f) c.drawText(label, fx, r.bottom + 18f * d, text)
+    }
+
+    companion object {
+        const val MIN_DP = 40f
+        const val MAX_DP = 220f
     }
 }

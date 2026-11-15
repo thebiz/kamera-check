@@ -653,6 +653,14 @@ versetzt. Neu: gemessen wird erst, wenn die Kamera „Linse steht“ meldet und 
 angefahrenen passt, plus ein Bild, bis die Vorschau es zeigt (höchstens 12 Bilder Wartezeit je Stufe).
 Dazu: Der Regler „Manueller Fokus“ sitzt jetzt unten über dem Zoomregler, wo der Daumen ist.
 
+**Zoom bis 25× und veränderbarer Fokusrahmen (Version 1.19, Johns Wunsch):** Die Kamera selbst zoomt
+höchstens 10×. Darüber bleibt die Vorschau bei 10×, ein gestrichelter Rahmen zeigt den Ausschnitt, den
+die App wirklich aufnimmt (bei 25× ist das 40 % der Vorschau); gerechnet wird wie gewohnt aus dem
+hochauflösenden Mittelteil (Kamera-Zoom 2×) mit eigenem Ausschnitt 12,5×. Ehrliche Erwartung: Über 10×
+liefert das Objektiv kaum noch neue Feinheit – der Test zeigt, wo die Grenze für Johns Augen liegt.
+Fokusrahmen: zwei Finger *im* Rahmen ansetzen und auseinander/zusammen ziehen (40–220 dp, wird gemerkt);
+das Messfeld für Belichtung und Phasen-Autofokus wächst mit. Zwei Finger außerhalb zoomen wie bisher.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -705,6 +713,7 @@ Dazu: Der Regler „Manueller Fokus“ sitzt jetzt unten über dem Zoomregler, w
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.19 | Zoom bis 25× (Ausschnitt-Rahmen über 10×), Fokusrahmen mit zwei Fingern veränderbar |
 | 1.18.1 | Autofokus misst erst bei stehender Linse; manueller Fokus unten |
 | 1.18 | Autofokus: Phasen-AF + Kontrast-Bestätigung, grün nur bei klarem Maximum, kein Pumpen |
 | 1.17.3 | 3D-Ansicht öffnet wieder (Gesten-Erkenner wurden im Hintergrund erzeugt) |

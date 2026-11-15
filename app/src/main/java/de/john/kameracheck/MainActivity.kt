@@ -100,7 +100,9 @@ class MainActivity : Activity() {
     private var wantOpen = false
 
     private var zoom = 1f
-    private var maxZoom = 10f
+    private var maxZoom = MAX_ZOOM_TOTAL
+    /** Höchster Zoom der Kamera selbst (Vorschau); darüber nimmt die App nur einen kleineren Ausschnitt */
+    private var camMaxZoom = 10f
     private var afRegion: MeteringRectangle? = null
     private var macroAvailable = false
     private var macro = false
@@ -414,7 +416,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        for (z in floatArrayOf(1f, 2f, 4f, 8f)) {
+        for (z in floatArrayOf(1f, 2f, 5f, 10f, 25f)) {
             val c = chip("${z.toInt()}×") { setZoom(z) }
             presetChips += z to c
             chips.addView(c, chipParams())
@@ -567,12 +569,34 @@ class MainActivity : Activity() {
         }
 
         // Gesten auf der Vorschau
+        // Zwei Finger: im Fokusrahmen angesetzt → Rahmen größer/kleiner (1.19, Johns Wunsch), sonst Zoom
+        var resizing = false
         val scale = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-            override fun onScale(d: ScaleGestureDetector): Boolean {
-                setZoom(zoom * d.scaleFactor)
+            override fun onScaleBegin(d: ScaleGestureDetector): Boolean {
+                val hit = max(focusView.size, dp(90f).toFloat()) * 0.75f
+                resizing = focusView.shown && abs(d.focusX - focusView.fx) < hit && abs(d.focusY - focusView.fy) < hit
                 return true
             }
+            override fun onScale(d: ScaleGestureDetector): Boolean {
+                if (resizing) {
+                    focusView.size = focusView.size * d.scaleFactor
+                    showStatus("Fokusrahmen ${(focusView.size / resources.displayMetrics.density).roundToInt()} dp")
+                } else setZoom(zoom * d.scaleFactor)
+                return true
+            }
+            override fun onScaleEnd(d: ScaleGestureDetector) {
+                if (resizing) {
+                    resizing = false
+                    getSharedPreferences("cam", MODE_PRIVATE).edit().putFloat("focusSize", focusView.size).apply()
+                    status.postDelayed({ if (!busy) showStatus(null) }, 800)
+                    setFocusPoint(focusView.fx, focusView.fy)
+                }
+            }
         })
+        try {
+            val fs = getSharedPreferences("cam", MODE_PRIVATE).getFloat("focusSize", 0f)
+            if (fs > 0f) focusView.size = fs
+        } catch (_: Throwable) {}
         val taps = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                 setFocusPoint(e.x, e.y)
@@ -790,7 +814,8 @@ class MainActivity : Activity() {
         val c = cm.getCameraCharacteristics(camId)
         chars = c
         sensorOrientation = c.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
-        maxZoom = c.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.upper ?: 10f
+        camMaxZoom = c.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.upper ?: 10f
+        maxZoom = max(camMaxZoom, MAX_ZOOM_TOTAL)
 
         val afModes = c.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: IntArray(0)
         macroAvailable = CaptureRequest.CONTROL_AF_MODE_MACRO in afModes
@@ -983,7 +1008,7 @@ class MainActivity : Activity() {
         try {
             val b = baseRequest(CameraDevice.TEMPLATE_PREVIEW)
             b.addTarget(ps)
-            b.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
+            b.set(CaptureRequest.CONTROL_ZOOM_RATIO, min(zoom, camMaxZoom))
             s.setRepeatingRequest(b.build(), lensCb, bg)
         } catch (_: Exception) {
         }
@@ -1010,10 +1035,13 @@ class MainActivity : Activity() {
     private fun setZoom(z: Float, fromSeek: Boolean = false) {
         val old = zoom
         zoom = z.coerceIn(1f, maxZoom)
-        if (focusView.shown && !draggingFocus && old != zoom) {
+        // über dem Kamera-Maximum: Vorschau bleibt, ein Rahmen zeigt den Ausschnitt, der aufgenommen wird
+        focusView.cropLabel = "${fmt(zoom)}×-Ausschnitt"
+        focusView.cropFrac = if (zoom > camMaxZoom) camMaxZoom / zoom else 1f
+        val f = min(zoom, camMaxZoom) / min(old, camMaxZoom)
+        if (focusView.shown && !draggingFocus && f != 1f) {
             val cx = texture.width / 2f
             val cy = texture.height / 2f
-            val f = zoom / old
             val nx = cx + (focusView.fx - cx) * f
             val ny = cy + (focusView.fy - cy) * f
             if (nx in 0f..texture.width.toFloat() && ny in 0f..texture.height.toFloat()) {
@@ -1050,7 +1078,8 @@ class MainActivity : Activity() {
         val (sxN, syN) = if (sensorOrientation == 270) (1 - ny) to nx else ny to (1 - nx)
         val sx = (sxN * active.width()).roundToInt()
         val sy = (syN * active.height()).roundToInt()
-        val half = active.width() / 32
+        // Messfeld wächst mit dem Fokusrahmen (Standardrahmen 76 dp ≙ 1/16 der Sensorbreite)
+        val half = (active.width() / 32f * focusView.size / (76f * resources.displayMetrics.density)).roundToInt().coerceAtLeast(16)
         val rect = Rect(
             max(0, sx - half), max(0, sy - half),
             min(active.width() - 1, sx + half), min(active.height() - 1, sy + half),
@@ -1091,7 +1120,7 @@ class MainActivity : Activity() {
             try {
                 val rep = baseRequest(CameraDevice.TEMPLATE_PREVIEW)
                 rep.addTarget(ps)
-                rep.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
+                rep.set(CaptureRequest.CONTROL_ZOOM_RATIO, min(zoom, camMaxZoom))
                 val cb = object : CameraCaptureSession.CaptureCallback() {
                     override fun onCaptureCompleted(ss: CameraCaptureSession, r: CaptureRequest, res: TotalCaptureResult) {
                         if (token != pdafToken || focusMode != FocusMode.PDAF) return
@@ -1109,7 +1138,7 @@ class MainActivity : Activity() {
                 s.setRepeatingRequest(rep.build(), cb, bg)
                 val trig = baseRequest(CameraDevice.TEMPLATE_PREVIEW)
                 trig.addTarget(ps)
-                trig.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
+                trig.set(CaptureRequest.CONTROL_ZOOM_RATIO, min(zoom, camMaxZoom))
                 trig.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
                 s.capture(trig.build(), cb, bg)
             } catch (_: Exception) {
@@ -3291,6 +3320,8 @@ class MainActivity : Activity() {
         private const val FG = 0xFFEDEDED.toInt()
         private const val MUTED = 0xFF8A8A8A.toInt()
         private const val MAX_AI_INPUT = 1024
+        /** Zoom bis hierhin (Johns Wunsch 1.19); über dem Kamera-Maximum nur noch eigener Ausschnitt */
+        private const val MAX_ZOOM_TOTAL = 25f
         private const val SWEEP_WAIT = 2
         /** Höchstens so viele Vorschaubilder auf die Linse warten, dann trotzdem messen */
         private const val SWEEP_MAX_WAIT = 12
