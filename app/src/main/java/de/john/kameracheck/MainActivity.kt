@@ -1505,7 +1505,7 @@ class MainActivity : Activity() {
                 val (blur, uniformity) = measureBlur(real, col.rotation)
                 info += uniformity
                 // Kleine Schrift: KI erfindet Striche statt Buchstaben (Diagnosebild 1.3) – Galerie ohne KI
-                val galleryMix = if (blur.fromText) 0 else ViewerActivity.DEFAULT_MIX
+                var galleryMix = if (blur.fromText) 0 else ViewerActivity.DEFAULT_MIX
                 ViewerActivity.startMix = galleryMix
 
                 // 4. Kameramodell: physikalisches Minimum, Messung darauf eingrenzen
@@ -1546,30 +1546,39 @@ class MainActivity : Activity() {
                 }
                 info += "Entschärft: $decIters Durchgänge (Richardson-Lucy mit Kantenschutz, starke Kanten gebremst)"
                 keep("5 entschärft (Echt)", sharp)
-                if (sharp !== real) real.recycle()
                 val decSecs = (SystemClock.elapsedRealtime() - tDec) / 100 / 10f
 
-                // 6. KI auf das entschärfte Bild – nur noch sanft zugemischt (Standard 30 %)
-                val model = if (strongOn) AiUpscaler.getStrong(this) { showStatus(it) } else a
-                val budget = if (strongOn) 180_000L else 45_000L
-                val maxTiles = max(if (strongOn) 4L else 40L, budget / max(1L, model.msPerTile)).toInt()
-                val cap = if (half) 2048f else MAX_AI_INPUT.toFloat()
-                var sc = min(1f, cap / max(sharp.width, sharp.height))
-                while (sc > 0.1f && model.tilesFor((sharp.width * sc).toInt(), (sharp.height * sc).toInt()) > maxTiles) sc *= 0.9f
-                val iw = max(16, (sharp.width * sc).roundToInt())
-                val ih = max(16, (sharp.height * sc).roundToInt())
-                val input = if (iw != sharp.width || ih != sharp.height) Bitmap.createScaledBitmap(sharp, iw, ih, true) else sharp
+                // 6a. KI-Entschärfen mit bekannter Unschärfe (DPIR) – rät nicht blind, nutzt die Messung/das Profil
+                val dp = dpirBitmap(real, sharp, sx, sy, sigmaMap, info)
+                if (sharp !== real) real.recycle()
 
-                val t0 = SystemClock.elapsedRealtime()
-                val label = if (strongOn) "Starke KI" else "KI"
-                val kiRaw = model.upscale(input, half) { done, total ->
-                    val left = (total - done) * model.msPerTile / 1000
-                    showStatus("$label … ${done * 100 / total} %" + if (left >= 10) " · noch ca. $left s" else "")
+                // 6b. sonst: Allzweck-KI auf das entschärfte Bild – nur sanft zugemischt
+                val kiRaw = if (dp != null) {
+                    galleryMix = 100
+                    ViewerActivity.startMix = 100
+                    dp
+                } else {
+                    val model = if (strongOn) AiUpscaler.getStrong(this) { showStatus(it) } else a
+                    val budget = if (strongOn) 180_000L else 45_000L
+                    val maxTiles = max(if (strongOn) 4L else 40L, budget / max(1L, model.msPerTile)).toInt()
+                    val cap = if (half) 2048f else MAX_AI_INPUT.toFloat()
+                    var sc = min(1f, cap / max(sharp.width, sharp.height))
+                    while (sc > 0.1f && model.tilesFor((sharp.width * sc).toInt(), (sharp.height * sc).toInt()) > maxTiles) sc *= 0.9f
+                    val iw = max(16, (sharp.width * sc).roundToInt())
+                    val ih = max(16, (sharp.height * sc).roundToInt())
+                    val input = if (iw != sharp.width || ih != sharp.height) Bitmap.createScaledBitmap(sharp, iw, ih, true) else sharp
+                    val t0 = SystemClock.elapsedRealtime()
+                    val label = if (strongOn) "Starke KI" else "KI"
+                    val k0 = model.upscale(input, half) { done, total ->
+                        val left = (total - done) * model.msPerTile / 1000
+                        showStatus("$label … ${done * 100 / total} %" + if (left >= 10) " · noch ca. $left s" else "")
+                    }
+                    if (input !== sharp) input.recycle()
+                    val secs = (SystemClock.elapsedRealtime() - t0) / 100 / 10f
+                    info += "KI ${if (strongOn) "stark" else "schnell"} (${model.backend}): ${fmt(secs)} s · Entschärfen ${fmt(decSecs)} s"
+                    if (galleryMix == 0) info += "Schrift erkannt → Galerie ohne KI (Regler im Viewer bleibt)"
+                    k0
                 }
-                if (input !== sharp) input.recycle()
-                val secs = (SystemClock.elapsedRealtime() - t0) / 100 / 10f
-                info += "KI ${if (strongOn) "stark" else "schnell"} (${model.backend}): ${fmt(secs)} s · Entschärfen ${fmt(decSecs)} s"
-                if (galleryMix == 0) info += "Schrift erkannt → Galerie ohne KI (Regler im Viewer bleibt)"
 
                 // Zielgröße: Mehrbild ×2 (RAW) bzw. Einzelbild ×4, lange Seite höchstens 4096 px
                 val mult = if (half) 2f else 4f
@@ -1580,7 +1589,7 @@ class MainActivity : Activity() {
                     Bitmap.createScaledBitmap(kiRaw, kw, kh, true).also { if (it !== kiRaw) kiRaw.recycle() }
                 else kiRaw
                 real = sharp
-                keep("6 KI pur", kiBmp)
+                keep(if (dp != null) "6 KI-Entschärfen (DPIR)" else "6 KI pur", kiBmp)
 
                 showStatus("Speichere …")
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
@@ -1755,6 +1764,56 @@ class MainActivity : Activity() {
             px[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or bl
         }
         return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888) to n
+    }
+
+    /**
+     * KI-Entschärfen mit bekannter Unschärfe (DPIR) auf der Helligkeit; Farbe vom Original.
+     * base = physikalisch entschärftes Bild für Kacheln, die das Zeitbudget nicht mehr schafft.
+     * Gibt null zurück, wenn das Modell nicht verfügbar ist.
+     */
+    private fun dpirBitmap(
+        src: Bitmap, base: Bitmap, sx: Float, sy: Float,
+        sigmaAt: ((Int, Int) -> FloatArray)?, info: MutableList<String>,
+    ): Bitmap? {
+        val net = try {
+            DeblurNet.get(this) { showStatus(it) }
+        } catch (e: Throwable) {
+            info += "KI-Entschärfen nicht verfügbar (${e.message}) – Allzweck-KI stattdessen"
+            return null
+        }
+        val w = src.width
+        val h = src.height
+        val px = IntArray(w * h)
+        val bpx = IntArray(w * h)
+        src.getPixels(px, 0, w, 0, 0, w, h)
+        base.getPixels(bpx, 0, w, 0, 0, w, h)
+        val lum = { p: Int -> (((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f) / 255f }
+        val y = FloatArray(w * h) { lum(px[it]) }
+        val yb = FloatArray(w * h) { lum(bpx[it]) }
+        val noise = Dpir.noiseLevel(y, w, h)
+        val t0 = SystemClock.elapsedRealtime()
+        val sig: (Int, Int) -> FloatArray = { x, yy ->
+            val s = sigmaAt?.invoke(x, yy) ?: floatArrayOf(sx, sy)
+            floatArrayOf(s[0].coerceIn(0.4f, 3f), s[1].coerceIn(0.4f, 3f))
+        }
+        val budget = if (strongOn) 300_000L else 120_000L
+        val out = Dpir.run(y, w, h, sig, noise, yb, budget, { t, s -> net.denoise(t, s) }) { done, total ->
+            val per = (SystemClock.elapsedRealtime() - t0) / max(1, done)
+            val left = (total - done) * per / 1000
+            showStatus("KI-Entschärfen … $done/$total" + if (left >= 10) " · noch ca. ${min(left, (budget - (SystemClock.elapsedRealtime() - t0)) / 1000)} s" else "")
+        }
+        for (i in px.indices) {
+            val d = (out.y[i] - y[i]) * 255f
+            val p = px[i]
+            val r = (((p shr 16) and 255) + d).roundToInt().coerceIn(0, 255)
+            val g = (((p shr 8) and 255) + d).roundToInt().coerceIn(0, 255)
+            val bl = ((p and 255) + d).roundToInt().coerceIn(0, 255)
+            px[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or bl
+        }
+        info += "KI-Entschärfen (DPIR, Unschärfe bekannt, ${net.backend}): ${out.done} von ${out.total} Kacheln" +
+            (if (out.done < out.total) " (Mitte zuerst, Rest physikalisch)" else "") +
+            " · Rauschen ${fmt(noise * 255)}/255 · ${(SystemClock.elapsedRealtime() - t0) / 1000} s"
+        return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
     }
 
     /**
@@ -2366,19 +2425,23 @@ class MainActivity : Activity() {
             info += "Entschärft: $decIters Durchgänge (Richardson-Lucy, starke Kanten gebremst)"
             keep("4 entschärft (gebremst)", sharp)
 
-            // 3. KI (Schrift erkannt → nicht in die Galerie)
-            val model = if (strongOn) AiUpscaler.getStrong(this) { showStatus(it) } else ai!!
-            val budget = if (strongOn) 180_000L else 45_000L
-            val maxTiles = max(if (strongOn) 4L else 40L, budget / max(1L, model.msPerTile)).toInt()
-            var sc = min(1f, 2048f / max(sharp.width, sharp.height))
-            while (sc > 0.1f && model.tilesFor((sharp.width * sc).toInt(), (sharp.height * sc).toInt()) > maxTiles) sc *= 0.9f
-            val iw = max(16, (sharp.width * sc).roundToInt())
-            val ih = max(16, (sharp.height * sc).roundToInt())
-            val input = if (iw != sharp.width || ih != sharp.height) Bitmap.createScaledBitmap(sharp, iw, ih, true) else sharp
-            val t0 = SystemClock.elapsedRealtime()
-            val kiRaw = model.upscale(input, true) { done, total -> showStatus("KI … ${done * 100 / total} %") }
-            if (input !== sharp) input.recycle()
-            info += "KI ${if (strongOn) "stark" else "schnell"} (${model.backend}): ${fmt((SystemClock.elapsedRealtime() - t0) / 1000f)} s"
+            // 3. KI-Entschärfen mit bekannter Unschärfe (DPIR); falls nicht verfügbar: Allzweck-KI
+            val dp = dpirBitmap(res.merged, sharp, sx, sy, null, info)
+            val kiRaw = dp ?: run {
+                val model = if (strongOn) AiUpscaler.getStrong(this) { showStatus(it) } else ai!!
+                val budget = if (strongOn) 180_000L else 45_000L
+                val maxTiles = max(if (strongOn) 4L else 40L, budget / max(1L, model.msPerTile)).toInt()
+                var sc = min(1f, 2048f / max(sharp.width, sharp.height))
+                while (sc > 0.1f && model.tilesFor((sharp.width * sc).toInt(), (sharp.height * sc).toInt()) > maxTiles) sc *= 0.9f
+                val iw = max(16, (sharp.width * sc).roundToInt())
+                val ih = max(16, (sharp.height * sc).roundToInt())
+                val input = if (iw != sharp.width || ih != sharp.height) Bitmap.createScaledBitmap(sharp, iw, ih, true) else sharp
+                val t0 = SystemClock.elapsedRealtime()
+                val k0 = model.upscale(input, true) { done, total -> showStatus("KI … ${done * 100 / total} %") }
+                if (input !== sharp) input.recycle()
+                info += "KI ${if (strongOn) "stark" else "schnell"} (${model.backend}): ${fmt((SystemClock.elapsedRealtime() - t0) / 1000f)} s"
+                k0
+            }
 
             // Ausgabegröße: Ausschnitt ×2, lange Seite höchstens 4096
             val fit = min(2f, 4096f / max(sharp.width, sharp.height))
@@ -2386,8 +2449,8 @@ class MainActivity : Activity() {
             val kh = max(1, (sharp.height * fit).roundToInt())
             val kiBmp = if (kiRaw.width != kw || kiRaw.height != kh)
                 Bitmap.createScaledBitmap(kiRaw, kw, kh, true).also { if (it !== kiRaw) kiRaw.recycle() } else kiRaw
-            keep("5 KI pur", kiBmp)
-            val galleryMix = if (blur.fromText) 0 else ViewerActivity.DEFAULT_MIX
+            keep(if (dp != null) "5 KI-Entschärfen (DPIR)" else "5 KI pur", kiBmp)
+            val galleryMix = if (dp != null) 100 else if (blur.fromText) 0 else ViewerActivity.DEFAULT_MIX
             ViewerActivity.startMix = galleryMix
             if (galleryMix == 0) info += "Schrift erkannt → Galerie ohne KI (Regler im Viewer bleibt)"
 

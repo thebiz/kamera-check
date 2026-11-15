@@ -27,9 +27,11 @@ Experimentelle KI-Zoom-Kamera für Android (getestet auf Poco X7 Pro).
 
 **Neueste APK:** [kamera-check.apk](https://github.com/thebiz/kamera-check/releases/latest/download/kamera-check.apk)
 
-## KI-Modell
+## KI-Modelle
 
-Beide Modelle stammen von [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) (BSD-3-Clause, © Xintao Wang):
+- `drunet256.onnx` – *DRUNet* (Graustufen) aus [DPIR/KAIR](https://github.com/cszn/KAIR) von Kai Zhang (MIT-Lizenz), umgewandelt mit `tools/export_drunet.py` – für das KI-Entschärfen mit bekannter Unschärfe
+
+Die Hochskalier-Modelle stammen von [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) (BSD-3-Clause, © Xintao Wang):
 
 - `sr128.onnx` – *realesr-general-x4v3*, 50/50 gemischt mit *realesr-general-wdn-x4v3*, umgewandelt mit `tools/export_model.py`
 - `sr_strong.onnx` – *RealESRGAN_x4plus* (fp16-Gewichte), umgewandelt mit `tools/export_x4plus.py`
