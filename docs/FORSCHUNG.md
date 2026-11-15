@@ -661,6 +661,11 @@ liefert das Objektiv kaum noch neue Feinheit – der Test zeigt, wo die Grenze f
 Fokusrahmen: zwei Finger *im* Rahmen ansetzen und auseinander/zusammen ziehen (40–220 dp, wird gemerkt);
 das Messfeld für Belichtung und Phasen-Autofokus wächst mit. Zwei Finger außerhalb zoomen wie bisher.
 
+**1.19.1:** Johns Test: Größer ging, kleiner nicht; und über 10× zoomte die Vorschau nicht mit. Ursache
+fürs Verkleinern: Androids Zwei-Finger-Erkennung hört auf, wenn die Finger eng zusammenliegen. Jetzt misst
+die App den Fingerabstand selbst (und doppelt empfindlich). Über 10× wird die Vorschau digital weiter
+vergrößert; die Rahmen-Ebene wird mitskaliert, Rahmen und Schrift bleiben in normaler Größe.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -713,6 +718,7 @@ das Messfeld für Belichtung und Phasen-Autofokus wächst mit. Zwei Finger auße
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.19.1 | Vorschau über 10× digital vergrößert (statt Rahmen), Fokusrahmen lässt sich auch verkleinern |
 | 1.19 | Zoom bis 25× (Ausschnitt-Rahmen über 10×), Fokusrahmen mit zwei Fingern veränderbar |
 | 1.18.1 | Autofokus misst erst bei stehender Linse; manueller Fokus unten |
 | 1.18 | Autofokus: Phasen-AF + Kontrast-Bestätigung, grün nur bei klarem Maximum, kein Pumpen |

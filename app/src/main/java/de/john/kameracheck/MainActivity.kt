@@ -569,30 +569,23 @@ class MainActivity : Activity() {
         }
 
         // Gesten auf der Vorschau
-        // Zwei Finger: im Fokusrahmen angesetzt → Rahmen größer/kleiner (1.19, Johns Wunsch), sonst Zoom
+        // Zwei Finger: Mitte der Finger am Fokusrahmen → Rahmen größer/kleiner (Johns Wunsch), sonst Zoom.
+        // Eigene Abstandsmessung statt ScaleGestureDetector: der hört bei eng zusammenliegenden Fingern auf
+        // (Fehler 1.19: kleiner ging nicht).
         var resizing = false
+        var span0 = 0f
+        var size0 = 0f
         val scale = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-            override fun onScaleBegin(d: ScaleGestureDetector): Boolean {
-                val hit = max(focusView.size, dp(90f).toFloat()) * 0.75f
-                resizing = focusView.shown && abs(d.focusX - focusView.fx) < hit && abs(d.focusY - focusView.fy) < hit
-                return true
-            }
             override fun onScale(d: ScaleGestureDetector): Boolean {
-                if (resizing) {
-                    focusView.size = focusView.size * d.scaleFactor
-                    showStatus("Fokusrahmen ${(focusView.size / resources.displayMetrics.density).roundToInt()} dp")
-                } else setZoom(zoom * d.scaleFactor)
+                if (!resizing) setZoom(zoom * d.scaleFactor)
                 return true
-            }
-            override fun onScaleEnd(d: ScaleGestureDetector) {
-                if (resizing) {
-                    resizing = false
-                    getSharedPreferences("cam", MODE_PRIVATE).edit().putFloat("focusSize", focusView.size).apply()
-                    status.postDelayed({ if (!busy) showStatus(null) }, 800)
-                    setFocusPoint(focusView.fx, focusView.fy)
-                }
             }
         })
+        fun span(e: MotionEvent): Float {
+            val dx = e.getX(0) - e.getX(1)
+            val dy = e.getY(0) - e.getY(1)
+            return sqrt(dx * dx + dy * dy)
+        }
         try {
             val fs = getSharedPreferences("cam", MODE_PRIVATE).getFloat("focusSize", 0f)
             if (fs > 0f) focusView.size = fs
@@ -608,6 +601,34 @@ class MainActivity : Activity() {
             }
         })
         texture.setOnTouchListener { _, e ->
+            if (e.actionMasked == MotionEvent.ACTION_POINTER_DOWN && e.pointerCount == 2 && focusView.shown) {
+                val mx = (e.getX(0) + e.getX(1)) / 2f
+                val my = (e.getY(0) + e.getY(1)) / 2f
+                val hit = max(focusView.localSize, dp(110f) / focusView.viewScale) * 0.75f
+                if (abs(mx - focusView.fx) < hit && abs(my - focusView.fy) < hit) {
+                    resizing = true
+                    span0 = max(1f, span(e))
+                    size0 = focusView.size
+                }
+            }
+            if (resizing) {
+                when (e.actionMasked) {
+                    MotionEvent.ACTION_MOVE -> if (e.pointerCount >= 2) {
+                        val r = span(e) / span0
+                        focusView.size = size0 * r * r      // doppelt empfindlich: wenig Fingerweg reicht
+                        showStatus("Fokusrahmen ${(focusView.size / resources.displayMetrics.density).roundToInt()} dp")
+                    }
+                    MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        resizing = false
+                        draggingFocus = false
+                        focusView.dragging = false
+                        getSharedPreferences("cam", MODE_PRIVATE).edit().putFloat("focusSize", focusView.size).apply()
+                        status.postDelayed({ if (!busy) showStatus(null) }, 800)
+                        setFocusPoint(focusView.fx, focusView.fy)
+                    }
+                }
+                return@setOnTouchListener true
+            }
             scale.onTouchEvent(e)
             if (scale.isInProgress || e.pointerCount > 1) {
                 if (draggingFocus) {
@@ -1036,8 +1057,13 @@ class MainActivity : Activity() {
         val old = zoom
         zoom = z.coerceIn(1f, maxZoom)
         // über dem Kamera-Maximum: Vorschau bleibt, ein Rahmen zeigt den Ausschnitt, der aufgenommen wird
-        focusView.cropLabel = "${fmt(zoom)}×-Ausschnitt"
-        focusView.cropFrac = if (zoom > camMaxZoom) camMaxZoom / zoom else 1f
+        // über dem Kamera-Maximum: Vorschau digital weiter vergrößern (Johns Wunsch 1.19.1); Rahmen-Ebene
+        // wird mitskaliert, damit Fokuspunkt und Bild übereinstimmen – gezeichnet wird in normaler Größe
+        val vs = if (zoom > camMaxZoom) zoom / camMaxZoom else 1f
+        texture.scaleX = vs; texture.scaleY = vs
+        focusView.scaleX = vs; focusView.scaleY = vs
+        focusView.viewScale = vs
+        focusView.cropFrac = 1f
         val f = min(zoom, camMaxZoom) / min(old, camMaxZoom)
         if (focusView.shown && !draggingFocus && f != 1f) {
             val cx = texture.width / 2f
@@ -1079,7 +1105,7 @@ class MainActivity : Activity() {
         val sx = (sxN * active.width()).roundToInt()
         val sy = (syN * active.height()).roundToInt()
         // Messfeld wächst mit dem Fokusrahmen (Standardrahmen 76 dp ≙ 1/16 der Sensorbreite)
-        val half = (active.width() / 32f * focusView.size / (76f * resources.displayMetrics.density)).roundToInt().coerceAtLeast(16)
+        val half = (active.width() / 32f * focusView.localSize / (76f * resources.displayMetrics.density)).roundToInt().coerceAtLeast(16)
         val rect = Rect(
             max(0, sx - half), max(0, sy - half),
             min(active.width() - 1, sx + half), min(active.height() - 1, sy + half),
@@ -1274,7 +1300,7 @@ class MainActivity : Activity() {
             sweepBmp = b
         }
         texture.getBitmap(b)
-        val n = max(48, (focusView.size * 0.8f).toInt())
+        val n = max(48, (focusView.localSize * 0.8f).toInt()).coerceAtMost(min(texture.width, texture.height))
         val x0 = (fx.toInt() - n / 2).coerceIn(0, tw - n)
         val y0 = (fy.toInt() - n / 2).coerceIn(0, th - n)
         if (sweepPx.size != n * n) sweepPx = IntArray(n * n)

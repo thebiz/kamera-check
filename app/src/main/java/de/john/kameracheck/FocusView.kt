@@ -56,6 +56,11 @@ class FocusView(ctx: Context) : View(ctx) {
     /** Rahmengröße – mit zwei Fingern im Rahmen veränderbar (Johns Wunsch 1.19) */
     var size = 76f * d
         set(v) { field = v.coerceIn(MIN_DP * d, MAX_DP * d); invalidate() }
+    /** Vorschau über 10× digital vergrößert: dieser View wird mitskaliert, gezeichnet wird in normaler Größe */
+    var viewScale = 1f
+        set(v) { field = v; invalidate() }
+    /** Rahmengröße in den (unskalierten) Koordinaten der Vorschau – für Messung und Treffer */
+    val localSize get() = size / viewScale
     val minSize get() = MIN_DP * d
     val maxSize get() = MAX_DP * d
 
@@ -104,7 +109,7 @@ class FocusView(ctx: Context) : View(ctx) {
         invalidate()
     }
 
-    fun contains(x: Float, y: Float) = shown && kotlin.math.abs(x - fx) < size * 0.75f && kotlin.math.abs(y - fy) < size * 0.75f
+    fun contains(x: Float, y: Float) = shown && kotlin.math.abs(x - fx) < localSize * 0.75f && kotlin.math.abs(y - fy) < localSize * 0.75f
 
     private val barBg = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -130,6 +135,15 @@ class FocusView(ctx: Context) : View(ctx) {
             text.color = 0xDDFFFFFF.toInt()
             c.drawText(cropLabel, width / 2f, height / 2f - h2 - 8f * d, text)
         }
+        val px = if (shown) fx else width / 2f
+        val py = if (shown) fy else height / 2f
+        c.save()
+        c.scale(1f / viewScale, 1f / viewScale, px, py)
+        drawMarks(c)
+        c.restore()
+    }
+
+    private fun drawMarks(c: Canvas) {
         if (capture >= 0f) {
             // Fortschritt am Motiv: Balken unter dem Rahmen (bzw. Bildmitte, wenn kein Rahmen da ist)
             val cx = if (shown) fx else width / 2f
