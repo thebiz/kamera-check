@@ -913,11 +913,14 @@ class MainActivity : Activity() {
 
     // ───────────────────────── Fokus ─────────────────────────
     //
-    // Statt Xiaomis Autofokus (der gern den Vordergrund nimmt) fährt die App den
-    // Fokus selbst durch und misst die Schärfe genau im Rahmen. Die beste Entfernung
-    // wird festgehalten; alle paar Sekunden wird fein nachgeprüft.
+    // Seit 1.18 (Johns Wunsch: schneller, zuverlässiger): erst stellt der eingebaute Phasen-Autofokus
+    // schnell auf den Rahmen scharf, dann prüft die eigene Kontrastmessung in einem engen Bereich nach.
+    // Liegt das Kontrast-Maximum am Rand dieses Bereichs, hat der Phasen-Autofokus danebengelegen
+    // (z. B. Vordergrund statt Ziel, das Problem aus 0.6) → voller eigener Durchlauf.
+    // Grün erst nach bestätigter Messung. Nachprüfen nur noch, wenn die Schärfe im Rahmen messbar sinkt
+    // (kein regelmäßiges „Pumpen“ mehr).
 
-    private enum class FocusMode { AUTO, SWEEP, LOCKED, MANUAL }
+    private enum class FocusMode { AUTO, PDAF, SWEEP, LOCKED, MANUAL }
 
     private var focusMode = FocusMode.AUTO
     /** Aktuelle Fokus-Entfernung in Dioptrien (0 = unendlich). */
@@ -930,7 +933,14 @@ class MainActivity : Activity() {
     private var sweepX = 0f
     private var sweepY = 0f
 
-    private class Sweep(val steps: FloatArray, val fine: Boolean, val quiet: Boolean, val restore: Float) {
+    /** Schärfe im Rahmen bei der festgehaltenen Entfernung (Maßstab fürs Nachprüfen) */
+    private var lockedScore = 0f
+    private var lastCheckAt = 0L
+    private var lowChecks = 0
+    private var pdafStartedAt = 0L
+    private var pdafToken = 0
+
+    private class Sweep(val steps: FloatArray, val fine: Boolean, val quiet: Boolean, val restore: Float, val verify: Boolean = false) {
         var i = 0
         var wait = 0
         val score = FloatArray(steps.size)
@@ -941,6 +951,9 @@ class MainActivity : Activity() {
         b.set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
         if (focusMode == FocusMode.AUTO) {
             b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+        } else if (focusMode == FocusMode.PDAF) {
+            b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+            afRegion?.let { b.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(it)) }
         } else {
             b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
             b.set(CaptureRequest.LENS_FOCUS_DISTANCE, focusDiopter)
@@ -1037,12 +1050,69 @@ class MainActivity : Activity() {
             bg?.post { startPreview() }
             return
         }
+        if (!macro && startPdaf()) return
         startSweep(fineAround = null, quiet = false)
+    }
+
+    /** Phasen-Autofokus der Kamera auf den Rahmen auslösen; Ergebnis kommt in [onPdafResult]. */
+    private fun startPdaf(): Boolean {
+        val c = chars ?: return false
+        val modes = c.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: return false
+        if (CaptureRequest.CONTROL_AF_MODE_AUTO !in modes) return false
+        if ((c.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) < 1) return false
+        val s = session ?: return false
+        val ps = previewSurface ?: return false
+        sweep = null
+        focusMode = FocusMode.PDAF
+        focusView.state = FocusView.State.SEARCHING
+        pdafStartedAt = SystemClock.elapsedRealtime()
+        val token = ++pdafToken
+        bg?.post {
+            try {
+                val rep = baseRequest(CameraDevice.TEMPLATE_PREVIEW)
+                rep.addTarget(ps)
+                rep.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
+                val cb = object : CameraCaptureSession.CaptureCallback() {
+                    override fun onCaptureCompleted(ss: CameraCaptureSession, r: CaptureRequest, res: TotalCaptureResult) {
+                        if (token != pdafToken || focusMode != FocusMode.PDAF) return
+                        val st = res.get(CaptureResult.CONTROL_AF_STATE) ?: return
+                        val done = st == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
+                            st == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED
+                        val late = SystemClock.elapsedRealtime() - pdafStartedAt > PDAF_TIMEOUT_MS
+                        if (done || late) {
+                            val d = res.get(CaptureResult.LENS_FOCUS_DISTANCE)
+                            pdafToken++
+                            runOnUiThread { onPdafResult(if (done) d else null) }
+                        }
+                    }
+                }
+                s.setRepeatingRequest(rep.build(), cb, bg)
+                val trig = baseRequest(CameraDevice.TEMPLATE_PREVIEW)
+                trig.addTarget(ps)
+                trig.set(CaptureRequest.CONTROL_ZOOM_RATIO, zoom)
+                trig.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
+                s.capture(trig.build(), cb, bg)
+            } catch (_: Exception) {
+                runOnUiThread { if (focusMode == FocusMode.PDAF) startSweep(fineAround = null, quiet = false) }
+            }
+        }
+        return true
+    }
+
+    /** Phasen-Autofokus fertig: in engem Bereich mit eigener Kontrastmessung bestätigen. */
+    private fun onPdafResult(d: Float?) {
+        if (focusMode != FocusMode.PDAF) return
+        if (d == null) {
+            startSweep(fineAround = null, quiet = false)   // kein Ergebnis → eigener voller Durchlauf
+            return
+        }
+        focusDiopter = d.coerceIn(0f, maxDiopter)
+        startSweep(fineAround = focusDiopter, quiet = false, verify = true)
     }
 
     private fun linspace(a: Float, b: Float, n: Int) = FloatArray(n) { a + (b - a) * it / (n - 1) }
 
-    private fun startSweep(fineAround: Float?, quiet: Boolean) {
+    private fun startSweep(fineAround: Float?, quiet: Boolean, verify: Boolean = false) {
         val steps = when {
             fineAround != null -> {
                 val r = if (quiet) 0.35f else max(0.5f, maxDiopter / 12f)
@@ -1052,7 +1122,7 @@ class MainActivity : Activity() {
             // Grob: dicht bei „fern“ (kleine Dioptrien), dort ist die Schärfentiefe am engsten verteilt
             else -> FloatArray(12) { i -> val t = i / 11f; t * t * maxDiopter }
         }
-        sweep = Sweep(steps, fineAround != null, quiet, focusDiopter)
+        sweep = Sweep(steps, fineAround != null, quiet, focusDiopter, verify)
         focusMode = FocusMode.SWEEP
         focusDiopter = steps[0]
         sweepX = focusView.fx
@@ -1063,6 +1133,12 @@ class MainActivity : Activity() {
 
     /** Pro Vorschaubild: Schärfe messen, nächste Stufe anfahren. */
     private fun sweepFrame() {
+        // Sicherung: kommt vom Phasen-Autofokus nichts (z. B. Vorschau zwischendurch neu gestartet) → eigener Durchlauf
+        if (focusMode == FocusMode.PDAF && !busy && SystemClock.elapsedRealtime() - pdafStartedAt > PDAF_TIMEOUT_MS + 600) {
+            pdafToken++
+            startSweep(fineAround = null, quiet = false)
+            return
+        }
         val sw = sweep ?: return
         if (busy) return
         if (sw.wait < SWEEP_WAIT) {
@@ -1097,15 +1173,27 @@ class MainActivity : Activity() {
             startSweep(fineAround = best, quiet = sw.quiet)
             return
         }
+        // Bestätigung des Phasen-Autofokus: Maximum am Rand → er lag daneben → voller eigener Durchlauf
+        val atEdge = bi == 0 && sw.steps[0] > 0f || bi == sw.steps.size - 1 && sw.steps.last() < maxDiopter
+        if (sw.verify && atEdge) {
+            startSweep(fineAround = null, quiet = false)
+            return
+        }
+        var mn = sw.score[0]
+        for (v in sw.score) mn = min(mn, v)
+        val flat = sw.score[bi] < mn * 1.06f
+        lockedScore = sw.score[bi]
+        lowChecks = 0
         focusDiopter = best
         focusMode = FocusMode.LOCKED
         lastSweepAt = SystemClock.elapsedRealtime()
         pendingTrackStart = true
         bg?.post { startPreview() }
-        focusView.state = FocusView.State.SHARP
+        // Grün nur, wenn die Messung ein klares Schärfe-Maximum gefunden hat
+        focusView.state = if (flat && !sw.quiet) FocusView.State.UNSHARP else FocusView.State.SHARP
         if (!sw.quiet) {
-            showStatus("Fokus ${distText(best)}")
-            status.postDelayed({ if (!busy) showStatus(null) }, 1200)
+            showStatus(if (flat) "Wenig Kontrast im Rahmen – Fokus unsicher (${distText(best)})" else "Fokus ${distText(best)}")
+            status.postDelayed({ if (!busy) showStatus(null) }, if (flat) 2500 else 1200)
         }
         if (pendingCalibShot) {
             pendingCalibShot = false
@@ -1234,11 +1322,18 @@ class MainActivity : Activity() {
         focusView.show(nx, ny)
         afRegion = regionFor(nx, ny)
 
-        // Nachprüfen: alle paar Sekunden fein um die aktuelle Entfernung
+        // Nachprüfen nur, wenn die Schärfe im Rahmen deutlich gesunken ist (zweimal hintereinander) –
+        // sonst bleibt die Linse ruhig (früher alle 5 s ein kleiner Durchlauf: sichtbares „Pumpen“)
         val now = SystemClock.elapsedRealtime()
-        if (focusMode == FocusMode.LOCKED && now - lastSweepAt > RECHECK_MS) {
-            lastSweepAt = now
-            startSweep(fineAround = focusDiopter, quiet = true)
+        if (focusMode == FocusMode.LOCKED && lockedScore > 0f && now - lastCheckAt > CHECK_MS && now - lastSweepAt > RECHECK_MS) {
+            lastCheckAt = now
+            val sc = measureSharpness(nx, ny)
+            lowChecks = if (sc < lockedScore * 0.6f) lowChecks + 1 else 0
+            if (lowChecks >= 2) {
+                lowChecks = 0
+                lastSweepAt = now
+                startSweep(fineAround = focusDiopter, quiet = true)
+            }
         }
     }
 
@@ -1260,7 +1355,7 @@ class MainActivity : Activity() {
                 focusMode = FocusMode.LOCKED
             }
         }
-        if (sweep != null) {
+        if (sweep != null || focusMode == FocusMode.PDAF) {
             showStatus("Stellt noch scharf – einen Moment")
             status.postDelayed({ if (!busy) showStatus(null) }, 1200)
             return
@@ -3168,6 +3263,10 @@ class MainActivity : Activity() {
         private const val PROFILE50_FILE = "schaerfeprofil50.json"
         private const val PATTERN_URL = "https://claude.ai/artifact/STqv4hLLZ5vm1NSBR2tb6k"
         private const val RAW_BUDGET = 150_000_000L
-        private const val RECHECK_MS = 5000L
+        private const val RECHECK_MS = 3000L
+        /** Wie oft die Schärfe im Rahmen bei festgehaltenem Fokus gemessen wird */
+        private const val CHECK_MS = 700L
+        /** So lange darf der Phasen-Autofokus brauchen, danach eigener Durchlauf */
+        private const val PDAF_TIMEOUT_MS = 1500L
     }
 }

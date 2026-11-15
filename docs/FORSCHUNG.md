@@ -631,6 +631,21 @@ Dunst entfernt, Plastizität nur noch über die Schärfe (nah knackiger, fern we
 bildschirmfüllend mit Zwei-Finger-Zoom, Verschieben, Doppeltippen und Regler „3D-Stärke“. Im Viewer
 liegen Klarheit und Tiefe hinter dem Knopf „Klarheit & Tiefe“, damit das Bild groß bleibt.
 
+**Autofokus neu (Version 1.18, Johns Wunsch):** Johns Befund am Abend: Das Scharfstellen ist nicht
+zuverlässig – es pumpt nach, und manchmal zeigt es grün, obwohl es nicht scharf ist. Ursache: Der eigene
+Kontrast-Durchlauf (seit 0.7, weil Xiaomis Autofokus in 0.6 den Vordergrund bevorzugte) ist bei wenig Licht
+oder schwacher Struktur unsicher, meldete aber immer grün; das stille Nachprüfen alle 5 s war als Pumpen
+sichtbar. Neu, als Mischung aus beiden Welten:
+1. **Phasen-Autofokus** der Kamera mit dem Rahmen als Messfeld (schnell, auch bei wenig Licht).
+2. **Bestätigung** mit der eigenen Kontrastmessung in einem engen Bereich um dessen Ergebnis. Liegt das
+   Maximum am Rand des Bereichs, lag der Phasen-Autofokus daneben (z. B. Vordergrund) → voller eigener
+   Durchlauf wie bisher. Antwortet er nicht binnen 1,5 s → ebenso.
+3. **Grün nur bei klarem Schärfe-Maximum**; ist die Kurve flach (< 6 % Unterschied), wird der Rahmen
+   als unsicher markiert und die App sagt es.
+4. **Kein Pumpen mehr:** Nachgeprüft wird nur, wenn die gemessene Schärfe im Rahmen zweimal hintereinander
+   unter 60 % des Werts beim Scharfstellen fällt.
+Makro behält den eigenen Durchlauf.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -683,6 +698,7 @@ liegen Klarheit und Tiefe hinter dem Knopf „Klarheit & Tiefe“, damit das Bil
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.18 | Autofokus: Phasen-AF + Kontrast-Bestätigung, grün nur bei klarem Maximum, kein Pumpen |
 | 1.17.3 | 3D-Ansicht öffnet wieder (Gesten-Erkenner wurden im Hintergrund erzeugt) |
 | 1.17.2 | Plastizität ohne Dunst, 3D bildschirmfüllend mit Zoom und Stärke-Regler, Regler zusammengeklappt |
 | 1.17.1 | Bei Tiefe im Bild für die schärfste Stelle schärfen; Rausch-Sicherung bei großer Unschärfe |
