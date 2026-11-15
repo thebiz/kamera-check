@@ -16,7 +16,9 @@ Experimentelle KI-Zoom-Kamera für Android (getestet auf Poco X7 Pro).
 - **Kalibrierung (Mehr › Kalibrieren):** Testmuster auf dem iPad (QR-Code in der App) – die App vermisst das eigene Objektiv (Mitte, Ecken, je Farbe) und nutzt das Schärfeprofil beim Entschärfen
 - **Fokuspunkt mit Verfolgung:** Tippen setzt einen Rahmen, der am Objekt klebt und laufend nachstellt (weiß = sucht, grün = scharf, orange = unscharf, grau gestrichelt = Ziel verloren). Rahmen ziehen verschiebt ihn, Doppeltippen = Autofokus
 - **Auslöse-Ring:** füllt sich, solange die Serie läuft; Vibration + „Fertig – du kannst loslassen“, sobald gerechnet wird
-- „Check“ zeigt, welche Kamera-Funktionen das Handy freigibt
+- **50 MP über die Xiaomi-Kamera:** Knopf „50 MP“ öffnet die Kamera-App; beim Zurückkommen holt die App die neuen Fotos, legt sie übereinander und rechnet weiter (auch per *Teilen* oder *Mehr › Fotos importieren*)
+- **Diagnosebild:** jeder Rechenschritt am selben Ausschnitt nebeneinander, landet in der Galerie
+- „Check“ zeigt, welche Kamera-Funktionen das Handy freigibt; der **50-MP-Test** probiert alle Wege zur vollen Sensorauflösung
 - Die App wählt beim Start automatisch den schnellsten Rechenweg (KI-Chip oder Prozessor)
 
 **Testmuster fürs iPad:** in der App unter *Mehr › Kalibrieren* (QR-Code) · Quelle: [docs/kalibrierung.html](docs/kalibrierung.html)

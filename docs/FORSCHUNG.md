@@ -22,7 +22,7 @@ herausholen, statt es nur hübsch zu erfinden.
 
 ---
 
-## 2. Die Rechenkette (Version 1.4)
+## 2. Die Rechenkette (Version 1.5)
 
 Ein Druck auf den Auslöser löst diese Schritte aus:
 
@@ -238,6 +238,39 @@ Detail liefert, zeigt erst das nächste Diagnosebild (Kachel 2 gegen Kachel 1).
 - **KI bei erkannter Schrift aus**: Die Galerie bekommt dann das reine physikalische Ergebnis;
   der KI-Regler im Viewer bleibt zum Ausprobieren.
 
+**Drittes Diagnosebild (Version 1.4):** ![Diagnose 1.4](diagnose_v1-4.jpg)
+
+- Das Mitteln macht das Bild **nicht mehr weicher**: Kachel 3 ist mindestens so scharf wie das
+  Einzelbild und ruhiger, die bunten Farbsäume sind weg – das kachelweise Ausrichten wirkt.
+- Kachel 5 (entschärft) kommt nah an die Vorschau, aber **„500 g“ sticht heraus** (Johns Blick):
+  kräftige Kanten wirken hart und „aufgeklebt“ neben der blassen Kleinschrift.
+- Die Vorschau bleibt knapp vorn.
+
+**Johns Ziel:** die volle Sensorauflösung (50 MP). Weil Xiaomi sie fremden Apps sperrt,
+gehen wir zwei Wege gleichzeitig (Version 1.5):
+
+1. **Umweg über die Xiaomi-Kamera** (Johns Entscheidung): Knopf „50 MP“ öffnet die
+   Kamera-App, John macht dort 1–8 Fotos im 50-MP-Modus, beim Zurückkommen holt die App die
+   neuen Fotos automatisch. Ausschnitt und Zoom werden gewählt, mehrere Fotos kachelweise
+   übereinandergelegt, gebremst entschärft – und wieder ein **Diagnosebild**, diesmal mit
+   der Kachel „wie 12 MP“ zum direkten Vergleich, was die 50 MP wirklich bringen.
+   Geht auch über *Teilen* aus der Galerie oder *Mehr › Fotos importieren*.
+2. **50-MP-Test** im Kamera-Check: probiert alle bekannten Wege (getrennt gelistete
+   „High-Resolution“-Größen, offizieller Ultra-HR-Modus, einzelne physische Kameras,
+   versteckte Kamera-Nummern), nimmt jeweils wirklich ein Bild auf und speichert es.
+   Erst das gespeicherte Bild zeigt, ob echte Details drin sind oder nur hochgerechnet wurde.
+
+**Entschärfen gebremst** (gegen das „aufgeklebte 500 g“): Änderung je Pixel weich gedeckelt,
+helle Säume über dem hellsten Nachbarn begrenzt. Simulation (`tools/sim/TameTest.kt`,
+Unschärfe σ = 1,2 px, Anteil des zurückgeholten Kontrasts):
+
+| | blasse Striche | kräftige Striche | heller Saum |
+|---|---|---|---|
+| Richardson-Lucy | 82 % | 86 % | +5,2 % |
+| gebremst | 76 % | 76 % | +2,2 % |
+
+Beide Strich-Arten werden jetzt gleich stark zurückgeholt, der Saum ist halbiert.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -287,6 +320,7 @@ Detail liefert, zeigt erst das nächste Diagnosebild (Kachel 2 gegen Kachel 1).
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.5 | 50-MP-Fotos der Xiaomi-Kamera importieren (automatisch, Teilen, Auswahl) mit Diagnosebild; 50-MP-Test; Entschärfen gebremst |
 | 1.4 | Kachelweises Ausrichten der Bildserie (zweistufig), unscharfe Bilder aussortiert, KI bei Schrift aus |
 | 1.3 | Quelle Kamera-Zoom: Bildprozessor zoomt bis 2× (hochauflösende Bildmitte), Rest rechnet die App; umschaltbar |
 | 1.2.1 | Diagnosebild aller Rechenschritte; Kalibrierung ansehen; Fehler „Knöpfe weg“ nach dem Kalibrieren behoben |
