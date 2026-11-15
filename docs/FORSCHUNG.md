@@ -723,6 +723,7 @@ wird gemerkt), großer Countdown in der Bildmitte, erneutes Tippen auf den Ausl�
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.20.1 | Timer-Knopf rechts neben dem Auslöser (war aus der Chip-Reihe gerutscht) |
 | 1.20 | Selbstauslöser mit wählbarer Zeit und Countdown |
 | 1.19.1 | Vorschau über 10× digital vergrößert (statt Rahmen), Fokusrahmen lässt sich auch verkleinern |
 | 1.19 | Zoom bis 25× (Ausschnitt-Rahmen über 10×), Fokusrahmen mit zwei Fingern veränderbar |

@@ -446,7 +446,9 @@ class MainActivity : Activity() {
             styleChip(timerChip, timerSec > 0)
         }
         styleChip(timerChip, timerSec > 0)
-        chips2.addView(timerChip, chipParams())
+        timerChip.textSize = 12f
+        timerChip.gravity = Gravity.CENTER
+        timerChip.setPadding(0, 0, 0, 0)
         panel.addView(chips2, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8f) })
         normalControls += listOf(zoomLabel, seek, chips, chips2)
 
@@ -483,7 +485,7 @@ class MainActivity : Activity() {
             bottomMargin = dp(12f); leftMargin = dp(12f); rightMargin = dp(12f)
         })
 
-        // Auslöser-Zeile: Vorschaubild · Auslöser · Platzhalter
+        // Auslöser-Zeile: Vorschaubild · Auslöser · Selbstauslöser
         val shotRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -516,7 +518,8 @@ class MainActivity : Activity() {
         shotRow.addView(shutter, LinearLayout.LayoutParams(dp(74f), dp(74f)).apply {
             leftMargin = dp(32f); rightMargin = dp(32f)
         })
-        shotRow.addView(View(this), LinearLayout.LayoutParams(dp(54f), dp(54f)))
+        // Selbstauslöser rechts neben dem Auslöser – gut sichtbar (1.20.1; vorher rutschte er aus der Chip-Reihe)
+        shotRow.addView(timerChip, LinearLayout.LayoutParams(dp(54f), dp(54f)))
         panel.addView(shotRow, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(14f) })
 
         val hint = TextView(this).apply {
@@ -696,7 +699,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun timerText() = if (timerSec == 0) "Timer aus" else "Timer ${timerSec} s"
+    private fun timerText() = if (timerSec == 0) "Timer\naus" else "Timer\n${timerSec} s"
 
     /** Auslöser mit Selbstauslöser; erneutes Tippen während des Countdowns bricht ab. */
     private fun shootWithTimer() {

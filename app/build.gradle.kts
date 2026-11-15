@@ -14,8 +14,8 @@ android {
         manifestPlaceholders["appLabel"] = (project.findProperty("appLabel") as String?) ?: "Kamera-Check"
         minSdk = 30
         targetSdk = 34
-        versionCode = 49
-        versionName = "1.20"
+        versionCode = 50
+        versionName = "1.20.1"
 
         ndk {
             abiFilters += "arm64-v8a"
