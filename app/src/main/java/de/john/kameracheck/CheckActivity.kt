@@ -23,40 +23,46 @@ class CheckActivity : Activity() {
      * kein Suchen in der Fotoauswahl nötig. Mehrere → kurze Liste mit Namen, keins → Fotoauswahl.
      */
     private fun chooseForCheck() {
-        val found = ArrayList<Pair<String, android.net.Uri>>()
+        val found = LinkedHashMap<String, android.net.Uri>()
+        val notes = ArrayList<String>()
+        // 1. Mediendatenbank: alle Testbilder, Größe egal (die Größe steht dort nicht immer drin)
         try {
             val col = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
             contentResolver.query(
-                col,
-                arrayOf(android.provider.MediaStore.Images.Media._ID, android.provider.MediaStore.Images.Media.DISPLAY_NAME,
-                    android.provider.MediaStore.Images.Media.WIDTH, android.provider.MediaStore.Images.Media.HEIGHT),
-                "${android.provider.MediaStore.Images.Media.DISPLAY_NAME} LIKE ?", arrayOf("test50mp_%"),
+                col, arrayOf(android.provider.MediaStore.Images.Media._ID, android.provider.MediaStore.Images.Media.DISPLAY_NAME),
+                "${android.provider.MediaStore.Images.Media.DISPLAY_NAME} LIKE ?", arrayOf("%test50mp%"),
                 "${android.provider.MediaStore.Images.Media.DATE_ADDED} DESC",
             )?.use { c ->
-                while (c.moveToNext() && found.size < 12) {
+                notes += "Mediendatenbank: ${c.count} Testbilder"
+                while (c.moveToNext()) {
                     val name = c.getString(1) ?: continue
-                    val w = c.getInt(2)
-                    val h = c.getInt(3)
-                    // 50-MP-Bilder: über die Größe oder (falls noch nicht eingetragen) über den Namen
-                    if (w.toLong() * h > 30_000_000L || (w == 0 && name.contains("_sr_"))) {
-                        found += "$name  (${if (w > 0) "$w × $h" else "Größe ?"})" to android.content.ContentUris.withAppendedId(col, c.getLong(0))
-                    }
+                    found.putIfAbsent(name, android.content.ContentUris.withAppendedId(col, c.getLong(0)))
                 }
-            }
-        } catch (_: Exception) {
+            } ?: run { notes += "Mediendatenbank: keine Antwort" }
+        } catch (e: Exception) {
+            notes += "Mediendatenbank: ${e.javaClass.simpleName}"
         }
-        when {
-            found.size == 1 -> checkPhoto(found[0].second)
-            found.size > 1 -> android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                .setTitle("Welches 50-MP-Bild prüfen?")
-                .setItems(found.map { it.first }.toTypedArray()) { _, i -> checkPhoto(found[i].second) }
-                .setNegativeButton("Anderes Foto wählen …") { _, _ -> pickForCheck() }
-                .show()
-            else -> {
-                detailOut.text = "Kein 50-MP-Testbild dieser App gefunden – bitte ein Foto auswählen."
-                pickForCheck()
-            }
+        // 2. direkt im Ordner nachsehen
+        try {
+            val dir = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES), "KameraCheck")
+            val files = dir.listFiles()?.filter { it.name.contains("test50mp") } ?: emptyList()
+            notes += "Ordner: ${files.size} Testbilder"
+            for (f in files.sortedByDescending { it.lastModified() }) found.putIfAbsent(f.name, android.net.Uri.fromFile(f))
+        } catch (e: Exception) {
+            notes += "Ordner: ${e.javaClass.simpleName}"
         }
+        // 50-MP-Bilder („_sr_“) nach oben
+        val list = found.entries.sortedByDescending { it.key.contains("_sr_") }.take(30)
+        if (list.isEmpty()) {
+            detailOut.text = "Keine Testbilder gefunden (${notes.joinToString(" · ")}).\n" +
+                "Einfacher Weg: im Dateimanager das Bild lange antippen › Teilen › „Echte 50 MP prüfen“."
+            return
+        }
+        android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Welches Bild prüfen? (50 MP = „_sr_“)")
+            .setItems(list.map { it.key }.toTypedArray()) { _, i -> checkPhoto(list[i].value) }
+            .setNegativeButton("Anderes Foto …") { _, _ -> pickForCheck() }
+            .show()
     }
 
     private fun pickForCheck() {
@@ -194,6 +200,11 @@ class CheckActivity : Activity() {
         root.addView(detailOut)
         detailImg = android.widget.ImageView(this).apply { adjustViewBounds = true }
         root.addView(detailImg)
+        // per „Teilen“ geschicktes Foto sofort prüfen
+        if (intent?.action == Intent.ACTION_SEND) {
+            @Suppress("DEPRECATION")
+            (intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM) ?: intent.clipData?.getItemAt(0)?.uri)?.let { checkPhoto(it) }
+        }
 
         root.addView(TextView(this).apply {
             text = report

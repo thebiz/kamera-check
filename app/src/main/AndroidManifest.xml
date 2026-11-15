@@ -27,8 +27,15 @@
 
         <activity
             android:name=".CheckActivity"
-            android:exported="false"
-            android:label="${appLabel}" />
+            android:exported="true"
+            android:label="${appLabel}">
+            <!-- „Teilen“ aus Dateimanager/Galerie: Foto direkt prüfen (echte 50 MP?) -->
+            <intent-filter android:label="Echte 50 MP prüfen">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+        </activity>
 
         <activity
             android:name=".ImportActivity"
