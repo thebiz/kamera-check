@@ -683,6 +683,7 @@ liegen Klarheit und Tiefe hinter dem Knopf „Klarheit & Tiefe“, damit das Bil
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.17.3 | 3D-Ansicht öffnet wieder (Gesten-Erkenner wurden im Hintergrund erzeugt) |
 | 1.17.2 | Plastizität ohne Dunst, 3D bildschirmfüllend mit Zoom und Stärke-Regler, Regler zusammengeklappt |
 | 1.17.1 | Bei Tiefe im Bild für die schärfste Stelle schärfen; Rausch-Sicherung bei großer Unschärfe |
 | 1.17 | Plastizität nach Tiefenkarte (MiDaS), 3D-Wackeln, Griff der Vergleichslinie unten; 1.16.1 gesichert |

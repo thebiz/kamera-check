@@ -59,7 +59,7 @@ class ParallaxView(ctx: Context) : View(ctx) {
         }
         layers = list
         t0 = System.nanoTime()
-        invalidate()
+        postInvalidate()   // darf aus dem Rechen-Thread kommen
     }
 
     fun release() {

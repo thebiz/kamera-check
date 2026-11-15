@@ -263,11 +263,13 @@ class ViewerActivity : Activity() {
         }
         val full = findViewById<FrameLayout>(android.R.id.content)
         full.addView(hint, FrameLayout.LayoutParams(-1, -1))
+        // Die Ansicht selbst (mit ihren Gesten-Erkennern) muss im Vordergrund entstehen – nur das Rechnen läuft
+        // im Hintergrund (Fehler 1.17.2: „Can't create handler inside thread … Looper.prepare()“)
+        val pv = ParallaxView(this)
         Thread {
             try {
                 val img = compare.renderMix()
                 val d = depth ?: Depth.estimate(this, img).also { depth = it }
-                val pv = ParallaxView(this)
                 pv.setImage(img, d)
                 img.recycle()
                 runOnUiThread {
