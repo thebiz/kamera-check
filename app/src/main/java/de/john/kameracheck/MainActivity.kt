@@ -436,6 +436,17 @@ class MainActivity : Activity() {
         chips2.addView(macroChip, chipParams())
         mfChip = chip("Manueller Fokus") { toggleManual() }
         chips2.addView(mfChip, chipParams())
+        // Selbstauslöser (Johns Wunsch: der Druck auf den Auslöser wackelt bei 14× am meisten)
+        timerSec = try { getSharedPreferences("cam", MODE_PRIVATE).getInt("timer", 0) } catch (_: Throwable) { 0 }
+        timerChip = chip(timerText()) {
+            val opts = TIMER_OPTIONS
+            timerSec = opts[(opts.indexOf(timerSec) + 1) % opts.size]
+            getSharedPreferences("cam", MODE_PRIVATE).edit().putInt("timer", timerSec).apply()
+            timerChip.text = timerText()
+            styleChip(timerChip, timerSec > 0)
+        }
+        styleChip(timerChip, timerSec > 0)
+        chips2.addView(timerChip, chipParams())
         panel.addView(chips2, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8f) })
         normalControls += listOf(zoomLabel, seek, chips, chips2)
 
@@ -500,7 +511,7 @@ class MainActivity : Activity() {
         }
         shotRow.addView(thumb, LinearLayout.LayoutParams(dp(54f), dp(54f)))
         shutter = ShutterView(this).apply {
-            setOnClickListener { if (calibStep >= 0) calibShutter() else shoot() }
+            setOnClickListener { if (calibStep >= 0) calibShutter() else shootWithTimer() }
         }
         shotRow.addView(shutter, LinearLayout.LayoutParams(dp(74f), dp(74f)).apply {
             leftMargin = dp(32f); rightMargin = dp(32f)
@@ -666,6 +677,45 @@ class MainActivity : Activity() {
             setColor(Color.TRANSPARENT)
             setStroke(dp(1.5f), 0xFF555555.toInt())
         }
+    }
+
+    private var timerSec = 0
+    private lateinit var timerChip: TextView
+    private var countdownLeft = 0
+    private val countdownTick = object : Runnable {
+        override fun run() {
+            countdownLeft--
+            if (countdownLeft <= 0) {
+                focusView.countdown = 0
+                shoot()
+            } else {
+                focusView.countdown = countdownLeft
+                shutter.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                shutter.postDelayed(this, 1000)
+            }
+        }
+    }
+
+    private fun timerText() = if (timerSec == 0) "Timer aus" else "Timer ${timerSec} s"
+
+    /** Auslöser mit Selbstauslöser; erneutes Tippen während des Countdowns bricht ab. */
+    private fun shootWithTimer() {
+        if (countdownLeft > 0) {
+            shutter.removeCallbacks(countdownTick)
+            countdownLeft = 0
+            focusView.countdown = 0
+            showStatus("Selbstauslöser abgebrochen")
+            status.postDelayed({ if (!busy) showStatus(null) }, 1000)
+            return
+        }
+        if (timerSec == 0 || busy) {
+            shoot()
+            return
+        }
+        countdownLeft = timerSec
+        focusView.countdown = countdownLeft
+        shutter.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        shutter.postDelayed(countdownTick, 1000)
     }
 
     private fun chip(label: String, onClick: () -> Unit) = TextView(this).apply {
@@ -3348,6 +3398,7 @@ class MainActivity : Activity() {
         private const val MAX_AI_INPUT = 1024
         /** Zoom bis hierhin (Johns Wunsch 1.19); über dem Kamera-Maximum nur noch eigener Ausschnitt */
         private const val MAX_ZOOM_TOTAL = 25f
+        private val TIMER_OPTIONS = intArrayOf(0, 1, 2, 3, 5, 10)
         private const val SWEEP_WAIT = 2
         /** Höchstens so viele Vorschaubilder auf die Linse warten, dann trotzdem messen */
         private const val SWEEP_MAX_WAIT = 12

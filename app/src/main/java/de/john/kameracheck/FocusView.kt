@@ -59,6 +59,15 @@ class FocusView(ctx: Context) : View(ctx) {
     /** Vorschau über 10× digital vergrößert: dieser View wird mitskaliert, gezeichnet wird in normaler Größe */
     var viewScale = 1f
         set(v) { field = v; invalidate() }
+    /** Selbstauslöser: verbleibende Sekunden groß in der Bildmitte (0 = aus) */
+    var countdown = 0
+        set(v) { field = v; invalidate() }
+    private val bigText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        color = 0xEEFFFFFF.toInt()
+        setShadowLayer(8f, 0f, 0f, 0xAA000000.toInt())
+    }
+
     /** Rahmengröße in den (unskalierten) Koordinaten der Vorschau – für Messung und Treffer */
     val localSize get() = size / viewScale
     val minSize get() = MIN_DP * d
@@ -141,6 +150,13 @@ class FocusView(ctx: Context) : View(ctx) {
         c.scale(1f / viewScale, 1f / viewScale, px, py)
         drawMarks(c)
         c.restore()
+        if (countdown > 0) {
+            c.save()
+            c.scale(1f / viewScale, 1f / viewScale, width / 2f, height / 2f)
+            bigText.textSize = 96f * d
+            c.drawText(countdown.toString(), width / 2f, height / 2f + 34f * d, bigText)
+            c.restore()
+        }
     }
 
     private fun drawMarks(c: Canvas) {

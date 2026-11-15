@@ -666,6 +666,11 @@ fürs Verkleinern: Androids Zwei-Finger-Erkennung hört auf, wenn die Finger eng
 die App den Fingerabstand selbst (und doppelt empfindlich). Über 10× wird die Vorschau digital weiter
 vergrößert; die Rahmen-Ebene wird mitskaliert, Rahmen und Schrift bleiben in normaler Größe.
 
+**Grenze bei Nacht und Selbstauslöser (Version 1.20):** Johns Test am späten Abend: 25× „nicht mehr
+ganz so“, **bis etwa 14× noch richtig, richtig gut**. Bei 14× wackelt vor allem der Druck auf den
+Auslöser. Neu: Selbstauslöser, Zeit wählbar (aus, 1, 2, 3, 5, 10 s – Tippen auf „Timer“ schaltet weiter,
+wird gemerkt), großer Countdown in der Bildmitte, erneutes Tippen auf den Auslöser bricht ab.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -718,6 +723,7 @@ vergrößert; die Rahmen-Ebene wird mitskaliert, Rahmen und Schrift bleiben in n
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.20 | Selbstauslöser mit wählbarer Zeit und Countdown |
 | 1.19.1 | Vorschau über 10× digital vergrößert (statt Rahmen), Fokusrahmen lässt sich auch verkleinern |
 | 1.19 | Zoom bis 25× (Ausschnitt-Rahmen über 10×), Fokusrahmen mit zwei Fingern veränderbar |
 | 1.18.1 | Autofokus misst erst bei stehender Linse; manueller Fokus unten |
