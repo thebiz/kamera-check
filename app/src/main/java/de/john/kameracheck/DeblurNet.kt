@@ -63,19 +63,19 @@ class DeblurNet private constructor(
             val known = prefs.getString("dpir_backend", null)
             val knownMs = prefs.getLong("dpir_ms", 0L)
             if (known != null && knownMs > 0) {
-                progress("KI-Entschärfen wird geladen …")
+                progress("Schärfe-KI wird geladen …")
                 return DeblurNet(env, env.createSession(bytes, if (known == "KI-Chip") npuOptions() else cpuOptions()), known, knownMs)
             }
             // Erstes Mal: beide Wege messen
             val test = FloatArray(Dpir.T * Dpir.T) { i -> if ((i / 7 + i % 13) % 5 == 0) 0.2f else 0.8f }
-            progress("KI-Entschärfen: messe Prozessor …")
+            progress("Schärfe-KI: messe Prozessor …")
             val cpu = DeblurNet(env, env.createSession(bytes, cpuOptions()), "Prozessor", 0)
             var t0 = System.nanoTime()
             val a = cpu.denoise(test, 10f / 255f)
             val cpuMs = (System.nanoTime() - t0) / 1_000_000
             var result = DeblurNet(env, cpu.session, "Prozessor", cpuMs)
             try {
-                progress("KI-Entschärfen: messe KI-Chip …")
+                progress("Schärfe-KI: messe KI-Chip …")
                 val npu = DeblurNet(env, env.createSession(bytes, npuOptions()), "KI-Chip", 0)
                 npu.denoise(test, 10f / 255f)
                 t0 = System.nanoTime()

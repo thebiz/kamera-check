@@ -416,8 +416,17 @@ das kleine Ersatzbild hineingeschrieben; der Test hatte die gemeldete Größe ni
 Root. Xiaomi steuert, welche fremden Apps mehr dürfen, über eine Freigabeliste in den
 Systemeigenschaften (`vendor.camera.aux.packagelist`, meist höchstens 4 App-Namen);
 ändern lässt sie sich nur mit Root. GCam-Ports brauchen ebenfalls Eingriffe in Systemdateien.
-Version 1.9.3 liest die lesbaren Kamera-Eigenschaften aus – stehen dort App-Namen, kann ein
-Testprogramm unter genau diesem Namen laufen.
+Version 1.9.3 liest die lesbaren Kamera-Eigenschaften aus.
+
+**Ergebnis:** `vendor.camera.aux.packagelist` ist lesbar und enthält nur Xiaomis eigene Test- und
+Werksprogramme. Entscheidender ist aber: Über die Kamera-Schnittstelle meldet der Hauptsensor
+(Sony IMX882 laut `persist.vendor.camera.mi.module.info`) bei *jeder* Kamera-ID höchstens
+4096 × 3072, auch für RAW, und „Ultra-HR: nein“. Die 50 MP entstehen in Xiaomis eigener Bildkette
+(`persist.sys.miui.camera.version = mtk`, MiVi Version 2), nicht in der Schnittstelle, die Apps
+nutzen. **Schluss: Auf diesem Handy sind 50 MP für eigene Apps ohne Root nicht erreichbar.**
+Der Weg über App-Namen wurde nicht weiter verfolgt – er hätte allenfalls weitere Linsen
+freigeschaltet, nicht die Auflösung. Der funktionierende Weg bleibt: 50-MP-JPEG aus der
+Xiaomi-Kamera (Pro-Modus, Format 3:4) + Import + Schärfe zurückholen (DPIR).
 
 ---
 
@@ -470,6 +479,7 @@ Testprogramm unter genau diesem Namen laufen.
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.10 | „Entschärfen“ heißt jetzt „Schärfe zurückholen“ (Johns Wunsch); 50-MP-Hinweis mit Pro-Modus und Format 3:4 |
 | 1.9.3 | Kamera-Freigaben im System lesen; Fehlalarm 50 MP korrigiert |
 | 1.9 | Erste 50-MP-Aufnahme in der eigenen App (versteckte Xiaomi-Größe + Remosaic); „Foto prüfen: echte 50 MP?“ |
 | 1.8.3 | 50-MP-Test absturzfest (Protokoll in Datei, abgestürzte Versuche werden übersprungen), Remosaic-Schalter einzeln |

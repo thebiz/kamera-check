@@ -111,7 +111,7 @@ class ViewerActivity : Activity() {
         compare.mix = v
         val pct = (v * 100).roundToInt()
         mixLabel.text = when (pct) {
-            0 -> "KI-Anteil: 0 % · nur echt (Mehrbild, entschärft)"
+            0 -> "KI-Anteil: 0 % · nur echt (Mehrbild, Schärfe zurückgeholt)"
             100 -> "KI-Anteil: 100 % · volle KI"
             else -> "KI-Anteil: $pct %"
         }

@@ -1501,7 +1501,7 @@ class MainActivity : Activity() {
                         (if (SuperRes.dropped > 0) " (${SuperRes.dropped} unscharf/verrutscht aussortiert)" else "")
                     yuvShake?.let { info += "Lagesensor: ${it.second}" }
                 }
-                if (half) keep("4 RAW-Mehrbild (vor dem Entschärfen)", real)
+                if (half) keep("4 RAW-Mehrbild (vor dem Schärfen)", real)
 
                 // 3. Unschärfe messen (Schrift als Eichmaß, je Richtung, je Bildbereich)
                 showStatus("Messe Unschärfe …")
@@ -1545,10 +1545,10 @@ class MainActivity : Activity() {
                 // 5. Physikalisch entschärfen (nichts erfinden, nur Gedämpftes zurückholen)
                 val tDec = SystemClock.elapsedRealtime()
                 val (sharp, decIters) = deblurBitmap(real, sx, sy, if (strongOn) 150 else 80, if (strongOn) 60_000L else 25_000L, sigmaMap) { pct ->
-                    showStatus("Entschärfe … $pct %")
+                    showStatus("Schärfe zurückholen … $pct %")
                 }
-                info += "Entschärft: $decIters Durchgänge (Richardson-Lucy mit Kantenschutz, starke Kanten gebremst)"
-                keep("5 entschärft (Echt)", sharp)
+                info += "Schärfe zurückgeholt (Physik): $decIters Durchgänge (Richardson-Lucy mit Kantenschutz, starke Kanten gebremst)"
+                keep("5 Schärfe zurückgeholt (Physik)", sharp)
                 val decSecs = (SystemClock.elapsedRealtime() - tDec) / 100 / 10f
 
                 // 6a. KI-Entschärfen mit bekannter Unschärfe (DPIR) – rät nicht blind, nutzt die Messung/das Profil
@@ -1578,7 +1578,7 @@ class MainActivity : Activity() {
                     }
                     if (input !== sharp) input.recycle()
                     val secs = (SystemClock.elapsedRealtime() - t0) / 100 / 10f
-                    info += "KI ${if (strongOn) "stark" else "schnell"} (${model.backend}): ${fmt(secs)} s · Entschärfen ${fmt(decSecs)} s"
+                    info += "KI ${if (strongOn) "stark" else "schnell"} (${model.backend}): ${fmt(secs)} s · Schärfen ${fmt(decSecs)} s"
                     if (galleryMix == 0) info += "Schrift erkannt → Galerie ohne KI (Regler im Viewer bleibt)"
                     k0
                 }
@@ -1592,7 +1592,7 @@ class MainActivity : Activity() {
                     Bitmap.createScaledBitmap(kiRaw, kw, kh, true).also { if (it !== kiRaw) kiRaw.recycle() }
                 else kiRaw
                 real = sharp
-                keep(if (dp != null) "6 KI-Entschärfen (DPIR)" else "6 KI pur", kiBmp)
+                keep(if (dp != null) "6 Schärfe zurückgeholt (KI, DPIR)" else "6 KI pur", kiBmp)
 
                 showStatus("Speichere …")
                 val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
@@ -1862,7 +1862,7 @@ class MainActivity : Activity() {
         val net = try {
             DeblurNet.get(this) { showStatus(it) }
         } catch (e: Throwable) {
-            info += "KI-Entschärfen nicht verfügbar (${e.message}) – Allzweck-KI stattdessen"
+            info += "Schärfe-KI nicht verfügbar (${e.message}) – Allzweck-KI stattdessen"
             return null
         }
         val w = src.width
@@ -1902,7 +1902,7 @@ class MainActivity : Activity() {
             val o = Dpir.run(plane, w, h, sigFor(if (perColor) fac!![c] else 1f), noise, fb, budget / passes, { t, sg -> net.denoise(t, sg) }) { d, tot ->
                 val per = (SystemClock.elapsedRealtime() - tc) / max(1, d)
                 val left = (tot - d) * per / 1000
-                showStatus("KI-Entschärfen $name… $d/$tot" + if (left >= 10) " · noch ca. $left s" else "")
+                showStatus("Schärfe zurückholen (KI) $name… $d/$tot" + if (left >= 10) " · noch ca. $left s" else "")
             }
             if (c == 0) { total = o.total; flat = o.flat }
             done += o.done
@@ -1926,7 +1926,7 @@ class MainActivity : Activity() {
             px[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or bl
         }
         val doneAvg = done / passes
-        info += "KI-Entschärfen (DPIR, Unschärfe bekannt, ${net.backend}): $doneAvg von $total Kacheln" +
+        info += "Schärfe zurückgeholt (KI, DPIR, Unschärfe bekannt, ${net.backend}): $doneAvg von $total Kacheln" +
             (if (flat > 0) " ($flat flach übersprungen)" else "") +
             (if (doneAvg < total) " · Rest physikalisch (Zeit)" else " · vollständig") +
             " · ${(SystemClock.elapsedRealtime() - t0) / 1000} s"
@@ -2354,7 +2354,8 @@ class MainActivity : Activity() {
         android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle("50 MP mit der Xiaomi-Kamera")
             .setMessage("Die volle Auflösung gibt Xiaomi nur der eigenen Kamera-App frei. Deshalb:\n\n" +
-                "1. In der Kamera-App oben auf „50 MP“ (bzw. „50M“) stellen.\n" +
+                "1. In der Kamera-App auf „Pro“ wechseln, Format 3:4 wählen und oben „50M“ einschalten " +
+                "(nur im Format 3:4 speichert sie wirklich 50 MP).\n" +
                 "2. 1 bis 8 Fotos vom selben Motiv machen, möglichst ruhig – mehrere werden übereinandergelegt.\n" +
                 "3. Mit „Zurück“ hierher kommen: Die App holt die neuen Fotos automatisch.")
             .setPositiveButton("Kamera öffnen") { _, _ -> launchXiaomi() }
@@ -2537,10 +2538,10 @@ class MainActivity : Activity() {
             info += "Unschärfe gemessen ${fmt(blur.sx)}/${fmt(blur.sy)} px" + (if (blur.fromText) " (an Schrift)" else "") +
                 (if (sx != blur.sx || sy != blur.sy) " → begrenzt auf ${fmt(sx)}/${fmt(sy)} px" else "")
             val (sharp, decIters) = deblurBitmap(res.merged, sx, sy, if (strongOn) 150 else 80, if (strongOn) 60_000L else 25_000L, null) { pct ->
-                showStatus("Entschärfe … $pct %")
+                showStatus("Schärfe zurückholen … $pct %")
             }
-            info += "Entschärft: $decIters Durchgänge (Richardson-Lucy, starke Kanten gebremst)"
-            keep("4 entschärft (gebremst)", sharp)
+            info += "Schärfe zurückgeholt (Physik): $decIters Durchgänge (Richardson-Lucy, starke Kanten gebremst)"
+            keep("4 Schärfe zurückgeholt (Physik)", sharp)
 
             // 3. KI-Entschärfen mit bekannter Unschärfe (DPIR); falls nicht verfügbar: Allzweck-KI
             val dp = dpirBitmap(res.merged, sharp, sx, sy, null, info)
@@ -2566,7 +2567,7 @@ class MainActivity : Activity() {
             val kh = max(1, (sharp.height * fit).roundToInt())
             val kiBmp = if (kiRaw.width != kw || kiRaw.height != kh)
                 Bitmap.createScaledBitmap(kiRaw, kw, kh, true).also { if (it !== kiRaw) kiRaw.recycle() } else kiRaw
-            keep(if (dp != null) "5 KI-Entschärfen (DPIR)" else "5 KI pur", kiBmp)
+            keep(if (dp != null) "5 Schärfe zurückgeholt (KI, DPIR)" else "5 KI pur", kiBmp)
             // Gegenprobe: Original nur klassisch nachgeschärft, genauso kräftig wie DPIR
             if (diagOn && dp != null) try {
                 val (cmp, amt) = matchedSharpen(res.single, kiBmp, dr, max(sx, sy))
