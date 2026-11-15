@@ -2,6 +2,8 @@ package de.john.kameracheck
 
 import android.app.Activity
 import android.content.ContentValues
+import android.content.Intent
+import android.net.Uri
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -81,6 +83,18 @@ class ViewerActivity : Activity() {
             seek.setValue(v)
             setMix(v)
         }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8f) })
+
+        // Johns Wunsch: Diagnosebild ohne Umweg über die Galerie direkt in den Chat schicken
+        lastDiag?.let { u ->
+            panel.addView(button("Diagnose teilen", false) {
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "image/jpeg"
+                    putExtra(Intent.EXTRA_STREAM, u)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(send, "Diagnose teilen"))
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8f) })
+        }
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -176,7 +190,10 @@ class ViewerActivity : Activity() {
         private const val FG = 0xFFEDEDED.toInt()
         private const val MUTED = 0xFF8A8A8A.toInt()
 
-        fun saveToGallery(a: Activity, b: Bitmap, name: String) {
+        /** Zuletzt gespeichertes Diagnose-/Vergleichsbild – zum direkten Teilen aus der Ansicht */
+        @Volatile var lastDiag: Uri? = null
+
+        fun saveToGallery(a: Activity, b: Bitmap, name: String): Uri {
             val values = ContentValues().apply {
                 put(MediaStore.Images.Media.DISPLAY_NAME, "$name.jpg")
                 put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
@@ -190,6 +207,7 @@ class ViewerActivity : Activity() {
             values.clear()
             values.put(MediaStore.Images.Media.IS_PENDING, 0)
             r.update(uri, values, null, null)
+            return uri
         }
     }
 }

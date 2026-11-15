@@ -1583,7 +1583,7 @@ class MainActivity : Activity() {
                 val decSecs = (SystemClock.elapsedRealtime() - tDec) / 100 / 10f
 
                 // 6a. KI-Entschärfen mit bekannter Unschärfe (DPIR) – rät nicht blind, nutzt die Messung/das Profil
-                val dp = dpirBitmap(real, sharp, sx, sy, sigmaMap, info)
+                val dp = dpirBitmap(real, sharp, sx, sy, sigmaMap, info, gridU)
                 if (sharp !== real) real.recycle()
 
                 // 6b. sonst: Allzweck-KI auf das entschärfte Bild – nur sanft zugemischt
@@ -1676,7 +1676,7 @@ class MainActivity : Activity() {
                 } else if (diag.isNotEmpty()) {
                     showStatus("Speichere Diagnosebild …")
                     val sheet = diagSheet(diag, info)
-                    ViewerActivity.saveToGallery(this, sheet, "diagnose_${stamp}_${tag}")
+                    ViewerActivity.lastDiag = ViewerActivity.saveToGallery(this, sheet, "diagnose_${stamp}_${tag}")
                     sheet.recycle()
                 }
                 val small = Bitmap.createScaledBitmap(mix, dp(54f) * 2, dp(54f) * 2 * mix.height / mix.width, true)
@@ -1745,7 +1745,7 @@ class MainActivity : Activity() {
         )
         if (tiles.isNotEmpty()) {
             val sheet = diagSheet(tiles, info.drop(2))
-            ViewerActivity.saveToGallery(this, sheet, "vergleich_${stamp}_${tag}")
+            ViewerActivity.lastDiag = ViewerActivity.saveToGallery(this, sheet, "vergleich_${stamp}_${tag}")
             sheet.recycle()
         }
         // übrige Kacheln freigeben (diagSheet gibt die verwendeten frei)
@@ -1955,6 +1955,8 @@ class MainActivity : Activity() {
     private fun dpirBitmap(
         src: Bitmap, base: Bitmap, sx: Float, sy: Float,
         sigmaAt: ((Int, Int) -> FloatArray)?, info: MutableList<String>,
+        /** Raster-Verfeinerung (RAW-Super-Resolution: 2): Nachbarpixel sind dort verwandt, Rauschen wirkt kleiner */
+        grid: Float = 1f,
     ): Bitmap? {
         val net = try {
             DeblurNet.get(this) { showStatus(it) }
@@ -1994,7 +1996,11 @@ class MainActivity : Activity() {
         val outPlanes = Array(passes) { c ->
             val plane = if (perColor) FloatArray(w * h) { ch(px[it], c) } else y
             val fb = if (perColor) FloatArray(w * h) { ch(bpx[it], c) } else FloatArray(w * h) { lum(bpx[it]) }
-            val noise = Dpir.noiseLevel(plane, w, h)
+            // Rausch-Untergrenze (Johns A/B-Test 15.11.): auf dem feineren RAW-Raster unterschätzt die Messung das
+            // Rauschen, die KI darf dann zu wenig glätten und verstärkt das 2-Pixel-Gittermuster („verpixelt“, helle Säume).
+            val est = Dpir.noiseLevel(plane, w, h)
+            val noise = max(est * grid, NOISE_FLOOR * grid)
+            if (c == 0) info += "Rauschen gemessen ${fmt(est * 255f)} · für die KI angesetzt ${fmt(noise * 255f)} (Stufen von 255)"
             val name = if (perColor) listOf("Rot", "Grün", "Blau")[c] + " " else ""
             val tc = SystemClock.elapsedRealtime()
             val o = Dpir.run(plane, w, h, sigFor(if (perColor) fac!![c] else 1f), noise, fb, budget / passes, { t, sg -> net.denoise(t, sg) }) { d, tot ->
@@ -2990,7 +2996,7 @@ class MainActivity : Activity() {
             }
             if (diag.isNotEmpty()) {
                 val sheet = diagSheet(diag, info)
-                ViewerActivity.saveToGallery(this, sheet, "diagnose_import_${stamp}")
+                ViewerActivity.lastDiag = ViewerActivity.saveToGallery(this, sheet, "diagnose_import_${stamp}")
                 sheet.recycle()
             }
             val small = Bitmap.createScaledBitmap(mix, dp(54f) * 2, dp(54f) * 2 * mix.height / mix.width, true)
@@ -3108,6 +3114,8 @@ class MainActivity : Activity() {
         private const val DIAG_IMPORT_PX = 300
         /** Import: so weit (Pixel) dürfen Fotos gegeneinander verrutscht sein */
         private const val IMPORT_MAX_SHIFT = 400
+        /** kleinste Rauschstufe, mit der die Schärfe-KI rechnet (2 von 255) */
+        private const val NOISE_FLOOR = 2f / 255f
         const val ACTION_IMPORT = "de.john.kameracheck.IMPORT"
         const val EXTRA_URIS = "uris"
         const val EXTRA_RECT = "rect"

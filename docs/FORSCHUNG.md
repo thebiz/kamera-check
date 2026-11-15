@@ -471,6 +471,26 @@ nimmt erst Serie A (bisheriger Weg) und direkt danach Serie B (RAW, 8–30 Bilde
 rechts per Regler bzw. „Echt ⇄ KI“ A oder B; ein gemeinsames Diagnosebild „vergleich_…“ zeigt die
 entscheidenden Kacheln. Johns Vorgabe: Jede Neuerung muss sich gegen den guten Weg beweisen.
 
+**Erster A/B-Vergleich (15.11.2026, 10×, Johns Bild „vergleich_…_10x“):** A (Kamera-Zoom, 16 von 16
+Bildern) vor B (30 RAW-Bilder, Raster 2× feiner). Befund in zwei Teilen:
+1. **Schon die Grundlage von B ist weicher als A**, mit orangem Farbsaum. Bei 10× nutzt B nur
+   410 × 306 Rohpixel (zusammengefasste 12-MP-Pixel), A dagegen den hochauflösenden Mittelteil über
+   den Kamera-Zoom (818 × 614). Doppelt so feines Raster kann halb so viele echte Pixel nicht
+   ausgleichen. Die weichen Farben kommen daher, dass jede Farbe im Rohbild nur jedes zweite Pixel hat.
+2. **B mit KI: Gittermuster („verpixelt“) und helle Säume.** Kleine Schrift erstaunlich lesbar,
+   aber alles kariert. Ursache: Die KI-Rechnung bekommt eine Rauschstufe mitgeteilt, die aus
+   Nachbarpixel-Unterschieden geschätzt wird. Auf dem verfeinerten Raster sind Nachbarpixel eng
+   verwandt, die Schätzung fällt viel zu klein aus; damit vertraut der Physik-Schritt den Daten
+   fast blind (ρ winzig) und verstärkt das 2-Pixel-Muster des Eintragens, das der Entrauscher
+   bei so kleiner Stufe stehen lässt.
+
+**Version 1.12.1:** Rausch-Untergrenze 2/255 für die KI-Rechnung; auf verfeinertem Raster
+(Faktor u) wird Schätzung und Untergrenze mit u vervielfacht. Die Diagnose nennt jetzt „Rauschen
+gemessen … · für die KI angesetzt …“. Dazu der Knopf **„Diagnose teilen“** im Viewer: das zuletzt
+gespeicherte Diagnose- oder Vergleichsbild geht ohne Umweg über die Galerie direkt ins Teilen-Menü.
+Erwartung: B verliert das Gitter, bleibt aber bei 10× wohl hinter A – RAW-SR lohnt sich vermutlich
+erst dort, wo A keinen Vorteil vom Kamera-Zoom mehr hat. Das muss der nächste Vergleich zeigen.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -523,6 +543,7 @@ entscheidenden Kacheln. Johns Vorgabe: Jede Neuerung muss sich gegen den guten W
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.12.1 | Gittermuster in B behoben (Rausch-Untergrenze für die KI), Knopf „Diagnose teilen“ |
 | 1.12 | Vergleich A/B: bisheriger Weg gegen RAW-Super-Resolution in einer Aufnahme |
 | 1.11.1 | 50-MP-Profil nur noch als Verlauf (Stärke aus dem Foto), Profil löschbar |
 | 1.11 | Kalibrieren für 50 MP, Farben vom Original, Physik-Schärfe an kräftigen Kanten, Echt ⇄ KI |
