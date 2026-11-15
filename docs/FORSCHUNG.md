@@ -377,6 +377,14 @@ Aber der Bericht zeigt die **Hersteller-Schalter** des Sensors (MediaTek/Xiaomi)
 12 MP normal (Vergleich), 12 MP mit Remosaic (YUV und RAW), alle angebotenen
 Super-Resolution-Größen und die größte Größe in acht Hersteller-Sitzungsarten.
 
+**Erster Lauf (Test S):** Vergleichsbild 12,6 MP gelang; beim ersten Versuch *mit* allen
+Remosaic-Schaltern gleichzeitig **stürzte die App ab** – der Schalter wird also nicht einfach
+ignoriert. Die Eigenschafts-Werte wurden nicht angezeigt (Hersteller-Eigenschaften sind nicht
+aufgelistet). **Version 1.8.3:** jeder Schalter einzeln (nur Anfrage / auch Sitzung),
+Eigenschaften über ihren Namen mit geratenem Datentyp gelesen, Protokoll Zeile für Zeile in
+eine Datei, Absturzursache wird mitgeschrieben, und der Versuch, bei dem es abstürzte, wird
+beim nächsten Start übersprungen – so kommt der Test Schritt für Schritt durch.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -428,6 +436,7 @@ Super-Resolution-Größen und die größte Größe in acht Hersteller-Sitzungsar
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.8.3 | 50-MP-Test absturzfest (Protokoll in Datei, abgestürzte Versuche werden übersprungen), Remosaic-Schalter einzeln |
 | 1.8.2 | 50-MP-Test Stufe 2: Remosaic- und Super-Resolution-Schalter von Xiaomi/MediaTek |
 | 1.8.1 | Testversionen mit anderen Paketnamen für den 50-MP-Test |
 | 1.8 | Gegenprobe „nur nachgeschärft“, flache Kacheln übersprungen, mehr Zeit, Farben getrennt bei Bedarf |

@@ -36,9 +36,18 @@ import java.util.concurrent.TimeUnit
  * Jeder Versuch nimmt wirklich ein Bild auf und meldet dessen tatsächliche Größe.
  * Gelungene Bilder landen als „test50mp_…“ in der Galerie, damit man die Schärfe prüfen kann.
  */
-class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
+class FullResTest(private val a: Activity, private val sink: (String) -> Unit) {
 
     private val cm = a.getSystemService(CameraManager::class.java)
+
+    // Protokoll übersteht Abstürze: jede Zeile sofort in eine Datei, der laufende Versuch wird gemerkt
+    private val prefs = a.getSharedPreferences("test50", 0)
+    private val logFile = java.io.File(a.filesDir, "test50.log")
+
+    private fun log(s: String) {
+        sink(s)
+        try { logFile.appendText(s + "\n") } catch (_: Exception) {}
+    }
 
     private class Attempt(
         val camId: String, val physId: String?, val size: Size, val format: Int,
@@ -47,9 +56,53 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
         val vendor: List<Pair<String, Int>> = emptyList(),
         val sessionType: Int = SessionConfiguration.SESSION_REGULAR,
         val tag: String = "",
+        /** Schalter zusätzlich als Sitzungs-Parameter (schaltet ggf. den Sensor-Modus um) */
+        val sessionParams: Boolean = true,
     )
 
     fun run() {
+        // Ist der letzte Lauf abgestürzt? Dann den Versuch, bei dem es passiert ist, künftig überspringen
+        val skip = HashSet(prefs.getStringSet("skip", emptySet()) ?: emptySet())
+        val crashed = prefs.getString("pending", null)
+        val crashInfo = prefs.getString("crash", null)
+        val oldTail = try { logFile.readLines().takeLast(4) } catch (_: Exception) { emptyList() }
+        if (crashed != null) skip += crashed
+        prefs.edit().putStringSet("skip", skip).remove("pending").remove("crash").apply()
+        try { logFile.writeText("") } catch (_: Exception) {}
+        if (crashed != null) {
+            log("⚠ Letzter Lauf ist abgestürzt bei: $crashed")
+            if (crashInfo != null) log("   Ursache: $crashInfo")
+            for (l in oldTail) log("   (zuletzt: ${l.trim()})")
+            log("   → dieser Versuch wird jetzt übersprungen.\n")
+        }
+        if (skip.isNotEmpty()) log("Übersprungen (früher abgestürzt): ${skip.size}\n")
+        this.skip = skip
+
+        // Abstürze in Neben-Threads mitschreiben, bevor die App beendet wird
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                prefs.edit().putString("crash", "${e.javaClass.simpleName}: ${e.message?.take(160)} @ ${e.stackTrace.take(3).joinToString(" ‹ ")}").commit()
+                logFile.appendText("ABSTURZ: ${e.javaClass.simpleName}: ${e.message}\n")
+            } catch (_: Exception) {}
+            prev?.uncaughtException(t, e)
+        }
+        try { runInner() } finally { Thread.setDefaultUncaughtExceptionHandler(prev) }
+    }
+
+    private var skip: Set<String> = emptySet()
+
+    /** Einen Versuch ausführen, abgesichert: vorher merken, nachher freigeben. */
+    private fun attempt(t: Attempt): String {
+        val key = t.label
+        if (key in skip) return "– übersprungen (ließ die App beim letzten Mal abstürzen)"
+        prefs.edit().putString("pending", key).commit()
+        val r = try { capture(t) } catch (e: Throwable) { "✗ ${e.javaClass.simpleName}: ${e.message?.take(120)}" }
+        prefs.edit().remove("pending").commit()
+        return r
+    }
+
+    private fun runInner() {
         log("50-MP-Test · ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}")
         log("App-Name (Paket): ${a.packageName} · Kameras laut System: ${cm.cameraIdList.joinToString()}\n")
         val ids = LinkedHashSet<String>()
@@ -83,8 +136,9 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
         if (todo.isEmpty()) log("Keine Größe über 14 MP angeboten – die Sperre sitzt schon in der Liste.")
         var ok = 0
         for (t in todo) {
-            val r = try { capture(t) } catch (e: Throwable) { "✗ ${e.javaClass.simpleName}: ${e.message?.take(120)}" }
-            log("${t.label}\n   → $r")
+            log("▶ ${t.label}")
+            val r = attempt(t)
+            log("   → $r")
             if (r.startsWith("✓")) ok++
         }
         log("\nFertig Stufe 1: $ok von ${todo.size} Versuchen lieferten ein Bild.")
@@ -99,15 +153,19 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
         log("Wichtig: Ein Bild mit 50-MP-Größe kann trotzdem nur hochgerechnet sein – die gespeicherten test50mp-Bilder bitte vergleichen.")
     }
 
-    /** Werte der Hersteller-Schlüssel zeigen und mit den Remosaic-Schaltern wirklich aufnehmen. */
+    /** Werte der Hersteller-Schlüssel zeigen und mit den Remosaic-Schaltern wirklich aufnehmen – jeden einzeln. */
     private fun vendorStage(id: String, c: CameraCharacteristics) {
         log("\n── Kamera $id: Werte")
         val interesting = listOf("superresolution", "remosaic", "qcfa", "binning", "sat.rawsize", "fakesat", "quad")
         var srSizes = ArrayList<Pair<Int, Size>>()
-        for (k in c.keys) {
-            val n = k.name
-            if (interesting.none { n.lowercase().contains(it) }) continue
-            val v = try { c.get(k) } catch (e: Throwable) { "?" }
+        // Hersteller-Schlüssel der Eigenschaften sind nicht aufgelistet: Namen bekannt, Datentyp raten
+        val charNames = (listOf(
+            "com.xiaomi.scaler.availableSuperResolutionStreamConfigurations", "com.xiaomi.sensor.info.binningFactor",
+            "com.xiaomi.qcfa.supported", "xiaomi.superResolution.yuvsize", "xiaomi.sat.rawsize",
+            "com.xiaomi.fakesat.FakeSatYuvSizeV2", "com.xiaomi.camera.supportedfeatures.remosaicyuvlpnr",
+        ) + c.keys.map { it.name }.filter { n -> interesting.any { n.lowercase().contains(it) } }).distinct()
+        for (n in charNames) {
+            val v = readChar(c, n) ?: continue
             log("   $n = ${show(v)}")
             if (n.contains("availableSuperResolutionStreamConfigurations") && v is IntArray) {
                 // Vermutlich wie die Android-Liste: Format, Breite, Höhe, Eingang
@@ -121,33 +179,57 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
         }
         val reqNames = c.availableCaptureRequestKeys.map { it.name }
         val remosaic = reqNames.filter { it.lowercase().contains("remosaic") && !it.lowercase().contains("type") }
-            .map { it to 1 }
-        log("   Remosaic-Schalter in Anfragen: ${if (remosaic.isEmpty()) "keine" else remosaic.joinToString { it.first }}")
+        log("   Remosaic-Schalter in Anfragen: ${if (remosaic.isEmpty()) "keine" else remosaic.joinToString()}")
         srSizes = ArrayList(srSizes.distinctBy { "${it.first}/${it.second}" })
         if (srSizes.isNotEmpty()) log("   Super-Resolution-Größen: ${srSizes.joinToString { "Format ${it.first}: ${mp(it.second)}" }}")
 
         val base = Size(4096, 3072)
         val list = ArrayList<Attempt>()
         list += Attempt(id, null, base, ImageFormat.YUV_420_888, false, "Kamera $id · YUV 12 MP normal (Vergleich)", tag = "normal")
-        if (remosaic.isNotEmpty()) {
-            list += Attempt(id, null, base, ImageFormat.YUV_420_888, false, "Kamera $id · YUV 12 MP mit Remosaic", remosaic, tag = "remosaic")
-            list += Attempt(id, null, base, ImageFormat.RAW_SENSOR, false, "Kamera $id · RAW 12 MP mit Remosaic", remosaic, tag = "remosaic_raw")
+        // jeden Schalter einzeln: erst nur in der Anfrage, dann auch als Sitzungs-Parameter
+        for (n in remosaic) {
+            val short = n.substringAfterLast('.').take(24)
+            list += Attempt(id, null, base, ImageFormat.YUV_420_888, false, "Kamera $id · YUV 12 MP · $n (Anfrage)",
+                listOf(n to 1), tag = "${short}_a", sessionParams = false)
+            list += Attempt(id, null, base, ImageFormat.YUV_420_888, false, "Kamera $id · YUV 12 MP · $n (Sitzung)",
+                listOf(n to 1), tag = "${short}_s", sessionParams = true)
         }
+        val all = remosaic.map { it to 1 }
+        if (all.size > 1) list += Attempt(id, null, base, ImageFormat.YUV_420_888, false, "Kamera $id · YUV 12 MP · alle Remosaic-Schalter", all, tag = "remosaic_alle")
+        if (all.isNotEmpty()) list += Attempt(id, null, base, ImageFormat.RAW_SENSOR, false, "Kamera $id · RAW 12 MP · alle Remosaic-Schalter", all, tag = "remosaic_raw")
         for ((fmt, sz) in srSizes) {
             val f = when (fmt) { 0x23 -> ImageFormat.YUV_420_888; 0x21 -> ImageFormat.JPEG; 0x20 -> ImageFormat.RAW_SENSOR; else -> continue }
-            list += Attempt(id, null, sz, f, false, "Kamera $id · Super-Resolution ${sz.width}×${sz.height} (Format $fmt) mit Remosaic", remosaic, tag = "sr")
+            list += Attempt(id, null, sz, f, false, "Kamera $id · Super-Resolution ${sz.width}×${sz.height} (Format $fmt) mit Remosaic", all, tag = "sr")
         }
         // Hersteller-Sitzungsarten (eigene Betriebsmodi der Xiaomi-Kamera) – nur mit der größten Größe
         val big = srSizes.filter { it.first == 0x23 }.maxByOrNull { it.second.width.toLong() * it.second.height }?.second
             ?: Size(8192, 6144)
         for (st in listOf(0x8001, 0x8002, 0x8003, 0x8005, 0x8007, 0x8009, 0x9000, 0x9001)) {
             list += Attempt(id, null, big, ImageFormat.YUV_420_888, false,
-                "Kamera $id · ${big.width}×${big.height} in Sitzungsart 0x${Integer.toHexString(st)}", remosaic, st, "mode${Integer.toHexString(st)}")
+                "Kamera $id · ${big.width}×${big.height} in Sitzungsart 0x${Integer.toHexString(st)}", all, st, "mode${Integer.toHexString(st)}")
         }
         for (t in list) {
-            val r = try { capture(t) } catch (e: Throwable) { "✗ ${e.javaClass.simpleName}: ${e.message?.take(120)}" }
-            log("${t.label}\n   → $r")
+            log("▶ ${t.label}")
+            log("   → ${attempt(t)}")
         }
+    }
+
+    /** Eigenschaft mit unbekanntem Datentyp lesen (Hersteller-Schlüssel). */
+    private fun readChar(c: CameraCharacteristics, name: String): Any? {
+        val ctor = try {
+            CameraCharacteristics.Key::class.java.getConstructor(String::class.java, Class::class.java)
+        } catch (_: Throwable) { return null }
+        for (type in listOf(IntArray::class.java, LongArray::class.java, ByteArray::class.java, FloatArray::class.java,
+            Int::class.javaObjectType, Byte::class.javaObjectType)) {
+            try {
+                @Suppress("UNCHECKED_CAST")
+                val k = ctor.newInstance(name, type) as CameraCharacteristics.Key<Any>
+                val v = c.get(k)
+                if (v != null) return v
+            } catch (_: Throwable) {
+            }
+        }
+        return null
     }
 
     private fun show(v: Any?): String = when (v) {
@@ -164,15 +246,21 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
     @Suppress("UNCHECKED_CAST")
     private fun setVendor(b: CaptureRequest.Builder, c: CameraCharacteristics, name: String, v: Int): Boolean {
         val key = c.availableCaptureRequestKeys.firstOrNull { it.name == name } as CaptureRequest.Key<Any>? ?: return false
-        for (cand in listOf<Any>(v, intArrayOf(v), v.toByte(), byteArrayOf(v.toByte()), v.toLong(), longArrayOf(v.toLong()), v != 0)) {
+        for (cand in listOf<Any>(intArrayOf(v), v, byteArrayOf(v.toByte()), v.toByte(), longArrayOf(v.toLong()), v.toLong(), v != 0)) {
             try {
                 b.set(key, cand)
+                // Probe: wird der Wert beim Zusammenbauen wirklich angenommen?
+                b.build()
+                lastType = cand.javaClass.simpleName
                 return true
             } catch (_: Throwable) {
+                try { b.set(key, null) } catch (_: Throwable) {}
             }
         }
         return false
     }
+
+    private var lastType = ""
 
     private fun collect(id: String, phys: String?, c: CameraCharacteristics, out: MutableList<Attempt>) {
         val tag = if (phys != null) "Kamera $id › physisch $phys" else "Kamera $id"
@@ -232,7 +320,8 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
                 })
             // Hersteller-Schalter auch als Sitzungs-Parameter: Remosaic schaltet den Sensor-Modus um
             var setOk = 0
-            if (t.vendor.isNotEmpty()) {
+            val types = ArrayList<String>()
+            if (t.vendor.isNotEmpty() && t.sessionParams) {
                 val sp = d.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
                 for ((n, v) in t.vendor) if (setVendor(sp, chars, n, v)) setOk++
                 sc.sessionParameters = sp.build()
@@ -246,7 +335,9 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
             var lastH = 0
             var bytes: ByteArray? = null
             val got = CountDownLatch(4)
+            var imgErr: String? = null
             reader.setOnImageAvailableListener({ r ->
+              try {
                 val img = r.acquireLatestImage() ?: return@setOnImageAvailableListener
                 lastW = img.width
                 lastH = img.height
@@ -260,6 +351,11 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
                 }
                 img.close()
                 got.countDown()
+              } catch (e: Throwable) {
+                  // kaputtes/ungewohntes Bild darf die App nicht beenden
+                  imgErr = "${e.javaClass.simpleName}: ${e.message?.take(80)}"
+                  got.countDown()
+              }
             }, h)
             val b = d.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
             b.addTarget(reader.surface)
@@ -267,7 +363,10 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
             if (t.maxRes && Build.VERSION.SDK_INT >= 31) {
                 b.set(CaptureRequest.SENSOR_PIXEL_MODE, CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION)
             }
-            for ((n, v) in t.vendor) setVendor(b, chars, n, v)
+            for ((n, v) in t.vendor) {
+                if (setVendor(b, chars, n, v)) types += lastType else types += "abgelehnt"
+            }
+            if (!t.sessionParams) setOk = types.count { it != "abgelehnt" }
             val req = b.build()
             val t0 = System.currentTimeMillis()
             try {
@@ -279,7 +378,7 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
             got.await(12, TimeUnit.SECONDS)
             val ms = System.currentTimeMillis() - t0
             try { s.stopRepeating() } catch (_: Exception) {}
-            if (lastW == 0) return "✗ kein Bild geliefert (${ms / 1000} s gewartet)"
+            if (lastW == 0) return "✗ kein Bild geliefert (${ms / 1000} s gewartet)" + (imgErr?.let { " · Bildfehler: $it" } ?: "")
             val mpx = lastW.toLong() * lastH / 1e6
             val sizeTxt = "${lastW}×${lastH} (${"%.1f".format(mpx)} MP)"
             val saved = bytes?.let { jb ->
@@ -289,7 +388,8 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
                 " · gespeichert als $name"
             } ?: ""
             val verdict = if (mpx > 30) "✓ BILD IN VOLLER GRÖSSE" else "✓ Bild, aber nur"
-            val sw = if (t.vendor.isNotEmpty()) " · Schalter gesetzt: $setOk/${t.vendor.size}" else ""
+            val sw = (if (t.vendor.isNotEmpty()) " · Schalter gesetzt: $setOk/${t.vendor.size} (Typ ${types.joinToString()})" else "") +
+                (imgErr?.let { " · Bildfehler: $it" } ?: "")
             return "$verdict $sizeTxt$saved$sw"
         } finally {
             try { session?.close() } catch (_: Exception) {}
