@@ -129,6 +129,15 @@ class MainActivity : Activity() {
      * Aus = bisheriger Weg (ganzes 12-MP-Bild + RAW).
      */
     private var ispZoomOn = true
+    /**
+     * Vergleich A/B: ein Druck auf den Auslöser nimmt zwei Serien direkt nacheinander auf –
+     * A = bisheriger Weg (Kamera-Zoom + Mitteln), B = RAW-Super-Resolution (Handzittern füllt ein
+     * doppelt so feines Raster). Beide bekommen „Schärfe zurückholen“; Viewer und Diagnosebild zeigen
+     * sie nebeneinander. So muss sich jede Neuerung gegen den guten Weg beweisen (Johns Vorgabe).
+     */
+    private var compareOn = true
+    private class CompareA(val img: Bitmap, val tiles: List<Pair<String, Bitmap>>, val info: List<String>)
+    @Volatile private var compareA: CompareA? = null
     private lateinit var calibOverlay: CalibOverlay
     private lateinit var calibBar: LinearLayout
     private lateinit var calibText: TextView
@@ -173,6 +182,8 @@ class MainActivity : Activity() {
         val diagPreview: Bitmap? = null, val diagRect: FloatArray? = null,
         /** Zoom, den der Bildprozessor des Handys selbst macht (1 = ganzes Sensorbild, Ausschnitt rechnen wir) */
         val isp: Float = 1f,
+        /** Vergleich A/B: 0 = aus, 1 = Teil A (Kamera-Zoom), 2 = Teil B (RAW-Super-Resolution) */
+        val compareStage: Int = 0,
     ) {
         val yuv = java.util.TreeMap<Long, Frame>()
         val raw = java.util.TreeMap<Long, ShortArray>()
@@ -214,6 +225,7 @@ class MainActivity : Activity() {
         profile50 = readProfile(PROFILE50_FILE)
         diagOn = getPreferences(MODE_PRIVATE).getBoolean("diag", true)
         ispZoomOn = getPreferences(MODE_PRIVATE).getBoolean("ispzoom", true)
+        compareOn = getPreferences(MODE_PRIVATE).getBoolean("compare", true)
         strongOn = getSharedPreferences("ki", MODE_PRIVATE).getBoolean("strong_on", false)
         updateChips()
 
@@ -1225,8 +1237,8 @@ class MainActivity : Activity() {
 
     // ───────────────────────── Auslösen ─────────────────────────
 
-    private fun shoot() {
-        if (busy) return
+    private fun shoot(stage0: Int = 0) {
+        if (busy && stage0 != 2) return
         val s = session ?: return
         val handler = bg ?: return
         if (ai == null) {
@@ -1247,13 +1259,19 @@ class MainActivity : Activity() {
             return
         }
         busy = true
-        shutter.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        if (stage0 != 2) shutter.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
         shutter.mode = ShutterView.Mode.CAPTURING
         lupeBox.visibility = View.GONE
 
         val z = zoom
         val calibNow = calibStep >= 0
-        val isp = if (ispZoomOn && !calibNow && z >= 2f) min(z, ISP_ZOOM) else 1f
+        val stage = when {
+            stage0 == 2 -> 2
+            compareOn && ispZoomOn && !calibNow && z >= 2f && rawReader != null -> 1
+            else -> 0
+        }
+        if (stage == 1) compareA = null
+        val isp = if (stage != 2 && ispZoomOn && !calibNow && z >= 2f) min(z, ISP_ZOOM) else 1f
         val withRaw = z >= 2f && rawReader != null && isp == 1f
         // RAW: so viele Bilder, wie ins Speicherbudget passen (8 bis 30)
         // Kalibrieren: nur den Zielrahmen (plus Rand) auslesen und 12 Bilder – viel schneller
@@ -1302,10 +1320,10 @@ class MainActivity : Activity() {
             } catch (_: Throwable) {
             }
         }
-        val col = Collector(region, count, z, rotation, withRaw, calibStep, calibBox, keepBox, diagPreview, diagRect, isp)
+        val col = Collector(region, count, z, rotation, withRaw, calibStep, calibBox, keepBox, diagPreview, diagRect, isp, stage)
         collecting = col
         showStatus(null)
-        showHold("Ruhig halten …")
+        showHold(if (stage == 2) "Teil 2 (RAW) – weiter ruhig halten …" else "Ruhig halten …")
 
         handler.post {
             try {
@@ -1422,6 +1440,14 @@ class MainActivity : Activity() {
         col.raw.clear()
         col.results.clear()
 
+        // Vergleich A/B: direkt nach Teil A die RAW-Serie hinterher, solange das Handy noch auf das Motiv zeigt
+        if (col.compareStage == 1) {
+            runOnUiThread {
+                holdLabel.text = "Teil 1 fertig – weiter ruhig halten (Teil 2: RAW) …"
+                holdLabel.visibility = View.VISIBLE
+                shutter.postDelayed({ shoot(2) }, 500)
+            }
+        } else
         // Aufnahme fertig: kurz vibrieren, Handy darf bewegt werden
         runOnUiThread {
             shutter.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
@@ -1617,6 +1643,7 @@ class MainActivity : Activity() {
                 // KI
                 val k = rotate(kiBmp, col.rotation)
                 cacheJpeg(k, ViewerActivity.KI)
+                val kCopy = if (col.compareStage != 0) k.copy(Bitmap.Config.ARGB_8888, false) else null
 
                 // In die Galerie: Mischung mit Standard-Anteil
                 val mix = Bitmap.createBitmap(k.width, k.height, Bitmap.Config.ARGB_8888)
@@ -1637,7 +1664,16 @@ class MainActivity : Activity() {
                         android.graphics.Paint().apply { alpha = galleryMix * 255 / 100 })
                     diag += "7 Galerie (Echt + $galleryMix % KI)" to m7
                 }
-                if (diag.isNotEmpty()) {
+                if (col.compareStage == 1 && kCopy != null) {
+                    // Teil A gerechnet: merken, Teil B (schon aufgenommen) rechnet gleich danach
+                    compareA = CompareA(kCopy, diag.toList(), info.toList())
+                    mix.recycle()
+                    showStatus("Teil A fertig – rechne Teil B (RAW-Super-Resolution) …")
+                    return@execute
+                }
+                if (col.compareStage == 2 && kCopy != null) {
+                    finishCompare(kCopy, diag, info, stamp, tag)
+                } else if (diag.isNotEmpty()) {
                     showStatus("Speichere Diagnosebild …")
                     val sheet = diagSheet(diag, info)
                     ViewerActivity.saveToGallery(this, sheet, "diagnose_${stamp}_${tag}")
@@ -1646,7 +1682,7 @@ class MainActivity : Activity() {
                 val small = Bitmap.createScaledBitmap(mix, dp(54f) * 2, dp(54f) * 2 * mix.height / mix.width, true)
                 mix.recycle()
 
-                File(cacheDir, ViewerActivity.INFO).writeText(info.joinToString("\n"))
+                if (col.compareStage != 2) File(cacheDir, ViewerActivity.INFO).writeText(info.joinToString("\n"))
                 showStatus("Fertig ✓")
                 runOnUiThread {
                     thumb.setImageBitmap(small)
@@ -1654,15 +1690,71 @@ class MainActivity : Activity() {
                     startActivity(Intent(this, ViewerActivity::class.java))
                 }
             } catch (e: OutOfMemoryError) {
+                compareA = null
                 showStatus("Zu wenig Speicher – etwas mehr zoomen")
             } catch (e: Throwable) {
+                compareA = null
                 showStatus("Fehler: ${e.message}")
             } finally {
-                busy = false
-                runOnUiThread { shutter.mode = ShutterView.Mode.IDLE }
-                status.postDelayed({ if (!busy) showStatus(null) }, 5000)
+                // Teil A: Teil B läuft noch – erst danach frei
+                if (!(col.compareStage == 1 && compareA != null)) {
+                    busy = false
+                    runOnUiThread { shutter.mode = ShutterView.Mode.IDLE }
+                    status.postDelayed({ if (!busy) showStatus(null) }, 5000)
+                }
             }
         }
+    }
+
+    /**
+     * Vergleich A/B zusammenführen: Viewer links/0 % = A (bisheriger Weg), 100 % = B (RAW-Super-Resolution),
+     * ein gemeinsames Diagnosebild mit den entscheidenden Kacheln beider Wege.
+     */
+    private fun finishCompare(bImg: Bitmap, diagB: List<Pair<String, Bitmap>>, infoB: List<String>, stamp: String, tag: String) {
+        val a = compareA
+        compareA = null
+        if (a == null) { bImg.recycle(); return }
+        // gleiche Größe für den Viewer (die größere)
+        val w = max(a.img.width, bImg.width)
+        val h = max(a.img.height, bImg.height)
+        val aS = if (a.img.width != w || a.img.height != h) Bitmap.createScaledBitmap(a.img, w, h, true) else a.img
+        val bS = if (bImg.width != w || bImg.height != h) Bitmap.createScaledBitmap(bImg, w, h, true) else bImg
+        cacheJpeg(aS, ViewerActivity.NORMAL)
+        cacheJpeg(aS, ViewerActivity.REAL)
+        cacheJpeg(bS, ViewerActivity.KI)
+        ViewerActivity.saveToGallery(this, bS, "zoom_${stamp}_${tag}_B-raw")
+        ViewerActivity.startMix = 100
+        val info = ArrayList<String>()
+        info += "VERGLEICH · links = A (bisheriger Weg) · rechts: Regler 0 % = A, 100 % = B (RAW-Super-Resolution)"
+        info += "„Echt ⇄ KI umschalten“ springt rechts zwischen A und B"
+        info += "── A: Kamera-Zoom + Mitteln + Schärfe zurückholen ──"
+        info += a.info
+        info += "── B: RAW-Super-Resolution + Schärfe zurückholen ──"
+        info += infoB
+        File(cacheDir, ViewerActivity.INFO).writeText(info.joinToString("\n"))
+        // Diagnosebild: Vorschau, A gemittelt, B RAW-SR, B Physik, A Ergebnis, B Ergebnis
+        fun pick(list: List<Pair<String, Bitmap>>, prefix: String, label: String) =
+            list.firstOrNull { it.first.startsWith(prefix) }?.let { label to it.second }
+        val tiles = listOfNotNull(
+            pick(a.tiles, "1", "Vorschau (Handy-Bildprozessor)"),
+            pick(a.tiles, "3", "A · Kamera-Zoom, gemittelt"),
+            pick(diagB, "4", "B · RAW-Super-Resolution"),
+            pick(diagB, "5", "B · + Schärfe (Physik)"),
+            pick(a.tiles, "6", "A · Ergebnis (KI)"),
+            pick(diagB, "6", "B · Ergebnis (KI)"),
+        )
+        if (tiles.isNotEmpty()) {
+            val sheet = diagSheet(tiles, info.drop(2))
+            ViewerActivity.saveToGallery(this, sheet, "vergleich_${stamp}_${tag}")
+            sheet.recycle()
+        }
+        // übrige Kacheln freigeben (diagSheet gibt die verwendeten frei)
+        val used = tiles.map { it.second }.toSet()
+        for (t in a.tiles + diagB) if (t.second !in used && !t.second.isRecycled) t.second.recycle()
+        if (aS !== a.img) a.img.recycle()
+        aS.recycle()
+        if (bS !== bImg) bImg.recycle()
+        bS.recycle()
     }
 
     /**
@@ -2102,6 +2194,7 @@ class MainActivity : Activity() {
         if (profile != null) m.menu.add(0, 2, 2, "Kalibrierung löschen")
         m.menu.add(0, 5, 3, if (diagOn) "Diagnosebild: an ✓" else "Diagnosebild: aus")
         m.menu.add(0, 6, 4, if (ispZoomOn) "Quelle: Kamera-Zoom ✓" else "Quelle: ganzes Sensorbild + RAW")
+        m.menu.add(0, 11, 5, if (compareOn) "Vergleich A/B (RAW-Super-Resolution): an ✓" else "Vergleich A/B: aus")
         m.menu.add(0, 7, 5, "Fotos importieren …")
         m.menu.add(0, 3, 6, "Kamera-Check")
         m.setOnMenuItemClickListener {
@@ -2126,6 +2219,12 @@ class MainActivity : Activity() {
                     showProfile(p, "50-MP-Schärfeprofil", "Wird beim Import von 50-MP-Fotos genutzt.", p.samples.map { where50(it.nx, it.ny) })
                 }
                 7 -> pickPhotos()
+                11 -> {
+                    compareOn = !compareOn
+                    getPreferences(MODE_PRIVATE).edit().putBoolean("compare", compareOn).apply()
+                    showStatus(if (compareOn) "Vergleich an: jedes Foto ab 2× zweimal – A bisher, B RAW-Super-Resolution" else "Vergleich aus")
+                    status.postDelayed({ if (!busy) showStatus(null) }, 3000)
+                }
                 6 -> {
                     ispZoomOn = !ispZoomOn
                     getPreferences(MODE_PRIVATE).edit().putBoolean("ispzoom", ispZoomOn).apply()
