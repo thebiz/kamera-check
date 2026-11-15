@@ -29,6 +29,13 @@ jobs:
       - name: APK umbenennen
         run: cp app/build/outputs/apk/debug/app-debug.apk kamera-check.apk
 
+      - name: Testversionen für den Namens-Trick (eigene Apps neben der normalen)
+        run: |
+          gradle :app:assembleDebug --no-daemon -PappId=com.google.android.GoogleCamera -PappLabel="Kamera-Check Test G"
+          cp app/build/outputs/apk/debug/app-debug.apk kamera-check-test-g.apk
+          gradle :app:assembleDebug --no-daemon -PappId=org.codeaurora.snapcam -PappLabel="Kamera-Check Test S"
+          cp app/build/outputs/apk/debug/app-debug.apk kamera-check-test-s.apk
+
       - name: Forschungsdokument als lesbare Seite
         run: |
           python3 -m pip install --quiet --break-system-packages markdown
@@ -42,4 +49,6 @@ jobs:
           body: "Wie alles funktioniert und was wir gelernt haben: Forschung.html (unten bei den Dateien)."
           files: |
             kamera-check.apk
+            kamera-check-test-g.apk
+            kamera-check-test-s.apk
             Forschung.html

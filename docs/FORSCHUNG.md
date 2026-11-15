@@ -349,6 +349,24 @@ kräftigere Schärfe (Johns Frage).
   gemessen; weichen sie mehr als 15 % voneinander ab, rechnet DPIR jede Farbe mit ihrer
   eigenen Unschärfe zurück (dreifache Zeit), sonst gemeinsam.
 
+**Gegenprobe (Version 1.8, 15.11.2026 vormittags):** ![Import 1.8](diagnose_import_v1-8.jpg)
+
+Erstmals alle 80 Kacheln mit DPIR (187 s, 4 flache übersprungen); R, G, B gleich unscharf
+(gemeinsam gerechnet). Kachel 5 (DPIR) gegen Kachel 6 (nur nachgeschärft, gleich kräftige
+Kanten): sehr ähnlich; DPIR ruhiger und sauberer, die Gegenprobe zeigt an der Erdnuss etwas
+mehr Struktur. Johns Urteil: Unterschied erkennbar, DPIR besser. Gemessene Unschärfe nur
+≈ 1 px – das Xiaomi-JPEG ist schon nahe an dem, was Objektiv und Bildverarbeitung hergeben.
+
+**50 MP als RAW?** Der 50-MP-Test (alle Kameras, auch versteckte) fand **keine einzige
+Größe über 14 MP** – die Sperre sitzt schon in der Liste. Open Camera (Camera2, RAW/DNG)
+bietet ebenfalls höchstens 4096 × 3072. Die Xiaomi-Kamera speichert beim Poco X7 Pro kein RAW.
+
+**Version 1.8.1 – Namens-Test:** Xiaomi gibt manche Kamera-Funktionen nur bestimmten
+App-Namen frei (so kommen GCam-Varianten an versteckte Objektive). Zwei Testversionen mit
+den Paketnamen `com.google.android.GoogleCamera` (Test G) und `org.codeaurora.snapcam`
+(Test S) laufen neben der normalen App; in beiden wird der 50-MP-Test wiederholt.
+Rooten wurde verworfen (Banking-Apps, Garantie).
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -400,6 +418,7 @@ kräftigere Schärfe (Johns Frage).
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.8.1 | Testversionen mit anderen Paketnamen für den 50-MP-Test |
 | 1.8 | Gegenprobe „nur nachgeschärft“, flache Kacheln übersprungen, mehr Zeit, Farben getrennt bei Bedarf |
 | 1.7 | KI-Entschärfen mit bekannter Unschärfe (DPIR/DRUNet) statt Allzweck-KI |
 | 1.6 | Import: Ausrichten bis ±400 px, Passprobe gegen Doppelbilder, Rahmen relativ ziehen |

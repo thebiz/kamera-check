@@ -46,7 +46,8 @@ class FullResTest(private val a: Activity, private val log: (String) -> Unit) {
     )
 
     fun run() {
-        log("50-MP-Test · ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}\n")
+        log("50-MP-Test · ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}")
+        log("App-Name (Paket): ${a.packageName} · Kameras laut System: ${cm.cameraIdList.joinToString()}\n")
         val ids = LinkedHashSet<String>()
         ids += cm.cameraIdList
         for (i in 0..9) ids += i.toString()

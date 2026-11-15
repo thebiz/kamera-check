@@ -10,7 +10,7 @@
 
     <application
         android:icon="@mipmap/ic_launcher"
-        android:label="Kamera-Check"
+        android:label="${appLabel}"
         android:largeHeap="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
@@ -28,7 +28,7 @@
         <activity
             android:name=".CheckActivity"
             android:exported="false"
-            android:label="Kamera-Check" />
+            android:label="${appLabel}" />
 
         <activity
             android:name=".ImportActivity"

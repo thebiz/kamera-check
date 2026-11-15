@@ -8,11 +8,14 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "de.john.kameracheck"
+        // Namens-Test: Xiaomi gibt manche Kamera-Funktionen nur bestimmten App-Namen frei.
+        // CI baut zusätzlich Testversionen mit anderem Paketnamen (-PappId=…), die neben der normalen App laufen.
+        applicationId = (project.findProperty("appId") as String?) ?: "de.john.kameracheck"
+        manifestPlaceholders["appLabel"] = (project.findProperty("appLabel") as String?) ?: "Kamera-Check"
         minSdk = 30
         targetSdk = 34
-        versionCode = 20
-        versionName = "1.8"
+        versionCode = 21
+        versionName = "1.8.1"
 
         ndk {
             abiFilters += "arm64-v8a"
