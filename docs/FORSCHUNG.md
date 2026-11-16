@@ -679,6 +679,18 @@ gemessen im **Y-Kanal des vollen Sensorbilds** (4096 × 3072) direkt unter dem R
 gemittelt**, erst bei stehender Linse; Ergebnis per Parabel verfeinert. Kostet etwa eine Sekunde.
 Abschaltbar im Menü „Mehr“ → „Feinfokus (hochaufgelöst)“ – zum fairen Vergleich mit dem bisherigen Fokus.
 
+**Schärfe je Stelle (Version 1.22, Johns Wahl „Qualität“):** Bisher galt eine Unschärfe fürs ganze Bild –
+bei Tiefe im Bild (Schuhe vorn, Karton dahinter) wurde seit 1.17.1 für die schärfste Stelle geschärft, der
+Rest bekam zu wenig. Neu, nur wenn die Gleichmäßigkeitsprüfung „ungleichmäßig“ meldet (ebene Motive wie der
+Karton bei 10× bleiben exakt beim bewährten Weg):
+- Unschärfe in **6 × 4 Feldern** einzeln gemessen (Kanten-Methode wie bisher).
+- Felder ohne genug Kanten (glatte Wand, dunkler Stoff) bekommen den Wert gemessener Felder **ähnlicher Tiefe**
+  (MiDaS-Tiefenkarte, im aufrechten Bild geschätzt) und Nähe – gleich weit weg ≈ gleich unscharf.
+- Je Feld höchstens das **Doppelte der schärfsten Stelle**: Was weit außerhalb der Schärfeebene liegt, lässt
+  sich nicht zurückholen; starkes Entfalten erzeugte dort am 15.11. die Ringe.
+- Weiche (bilineare) Karte; Physik-Schritt und KI (DPIR, kachelweise) nutzen je Stelle ihren Wert.
+Abschaltbar im Menü „Mehr“ → „Schärfe je Stelle“. Die Diagnose nennt Felder, ergänzte Felder und Bereich.
+
 ---
 
 ## 4. Was wir gelernt haben
@@ -731,6 +743,7 @@ Abschaltbar im Menü „Mehr“ → „Feinfokus (hochaufgelöst)“ – zum fai
 | 0.9 | Schrift als Eichmaß, Unschärfe je Richtung, Lagesensor |
 | 1.0 | Physik statt Raten: Kameramodell, Entschärfen, Gleichmäßigkeitsprüfung, KI nur 30 %, Infozeile bleibt stehen |
 | 1.0.1 | Vorschau passt sich an, Auslöser nie abgeschnitten |
+| 1.22 | Schärfe je Stelle: Unschärfe-Karte aus 6×4 Feldern, Lücken über die Tiefenkarte ergänzt (nur bei Tiefe im Bild) |
 | 1.21 | Feinfokus: feiner Suchlauf im vollen Sensorbild, je Stufe 3 Bilder gemittelt (abschaltbar) |
 | 1.20.1 | Timer-Knopf rechts neben dem Auslöser (war aus der Chip-Reihe gerutscht) |
 | 1.20 | Selbstauslöser mit wählbarer Zeit und Countdown |

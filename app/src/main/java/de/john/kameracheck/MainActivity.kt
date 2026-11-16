@@ -230,6 +230,7 @@ class MainActivity : Activity() {
         ispZoomOn = getPreferences(MODE_PRIVATE).getBoolean("ispzoom", true)
         compareOn = getPreferences(MODE_PRIVATE).getBoolean("compare2", false)
         hrFocusOn = getPreferences(MODE_PRIVATE).getBoolean("hrfocus", true)
+        localBlurOn = getPreferences(MODE_PRIVATE).getBoolean("localblur", true)
         strongOn = getSharedPreferences("ki", MODE_PRIVATE).getBoolean("strong_on", false)
         updateChips()
 
@@ -1050,6 +1051,8 @@ class MainActivity : Activity() {
 
     /** Feinfokus (1.21, Johns Befund: Autofokus liegt knapp neben der Stelle, die er von Hand findet) */
     private var hrFocusOn = true
+    /** Schärfe je Stelle (1.22) – nur aktiv, wenn die Schärfe im Bild ungleichmäßig ist */
+    private var localBlurOn = true
 
     /** Messung im vollen Sensorbild für eine Stufe des Feinfokus: mehrere Bilder gemittelt */
     private class HrCollect(val step: Int, val u: Float, val v: Float, val half: Int) {
@@ -1902,7 +1905,7 @@ class MainActivity : Activity() {
                 if (sx != blur.sx || sy != blur.sy) info += "→ physikalisch begrenzt auf ${fmt(sx)}/${fmt(sy)} px"
 
                 // Je Bildbereich: Profil + Zusatz-Unschärfe dieses Fotos (Fokus, Verwacklung) quadratisch addiert
-                val sigmaMap: ((Int, Int) -> FloatArray)? = if (prof != null && pc != null) {
+                var sigmaMap: ((Int, Int) -> FloatArray)? = if (prof != null && pc != null) {
                     val ex2 = max(0f, sx * sx - pc[0] * pc[0])
                     val ey2 = max(0f, sy * sy - pc[1] * pc[1])
                     info += "Schärfeprofil aktiv (kalibriert ${prof.date}) · Zusatz-Unschärfe ${fmt(sqrt(ex2))}/${fmt(sqrt(ey2))} px"
@@ -1912,6 +1915,18 @@ class MainActivity : Activity() {
                     }
                     fn
                 } else null
+                // Schärfe je Stelle (1.22, Johns Wunsch „Qualität“): bei Tiefe im Bild jede Stelle mit ihrer eigenen
+                // Unschärfe schärfen; Stellen ohne Kanten bekommen den Wert gleich weit entfernter Stellen (Tiefenkarte)
+                if (sigmaMap == null && localBlurOn && uniformity.startsWith("Schärfe ungleichmäßig")) {
+                    showStatus("Messe Schärfe je Stelle …")
+                    try {
+                        localBlurMap(real, col.rotation, sx, sy, lo, hi)?.let { (fn, note) ->
+                            sigmaMap = fn
+                            info += note
+                        }
+                    } catch (_: Throwable) {
+                    }
+                }
 
                 // 5. Physikalisch entschärfen (nichts erfinden, nur Gedämpftes zurückholen)
                 val tDec = SystemClock.elapsedRealtime()
@@ -2169,6 +2184,99 @@ class MainActivity : Activity() {
             }
         }
         return BlurEstimate.Result(sx, sy, r.edges, r.fromText) to (note + note2)
+    }
+
+    /**
+     * Unschärfe je Stelle: 6 × 4 Felder einzeln messen; Felder ohne genug Kanten aus gemessenen Feldern ähnlicher
+     * Tiefe (MiDaS) und Nähe ergänzen. Begrenzt auf höchstens das Doppelte der schärfsten Stelle: Was weit außerhalb
+     * der Schärfeebene liegt, lässt sich nicht zurückholen – dort würde starkes Entfalten nur Ringe erzeugen.
+     * Liefert eine weiche (bilineare) Karte (σx, σy) für jede Bildstelle.
+     */
+    private fun localBlurMap(b: Bitmap, rotation: Int, sx: Float, sy: Float, lo: Float, hi: Float): Pair<(Int, Int) -> FloatArray, String>? {
+        val half = max(b.width, b.height) > 1400
+        val src = if (half) Bitmap.createScaledBitmap(b, b.width / 2, b.height / 2, true) else b
+        val w = src.width
+        val h = src.height
+        val px = IntArray(w * h).also { src.getPixels(it, 0, w, 0, 0, w, h) }
+        val y = FloatArray(w * h) { i ->
+            val p = px[i]
+            (((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f) / 255f
+        }
+        val k = if (half) 2f else 1f
+        val cols = 6
+        val rows = 4
+        val meas = FloatArray(cols * rows) { Float.NaN }
+        for (ry in 0 until rows) for (rx in 0 until cols) {
+            val x0 = rx * w / cols; val x1 = (rx + 1) * w / cols
+            val y0 = ry * h / rows; val y1 = (ry + 1) * h / rows
+            val sw = x1 - x0; val sh = y1 - y0
+            val sub = FloatArray(sw * sh)
+            for (yy in 0 until sh) System.arraycopy(y, (y0 + yy) * w + x0, sub, yy * sw, sw)
+            val m = BlurEstimate.measure(sub, sw, sh)
+            if (m.edges >= 30 && !m.mean.isNaN()) meas[ry * cols + rx] = m.mean * k
+        }
+        val valid = meas.indices.filter { !meas[it].isNaN() }
+        if (valid.size < 2) {
+            if (src !== b) src.recycle()
+            return null
+        }
+        val sharpest = valid.minOf { meas[it] }
+        // Tiefe je Feld (Tiefenkarte im aufrechten Bild geschätzt, zurück in Sensorlage)
+        val tileDepth: FloatArray? = try {
+            val small = Bitmap.createScaledBitmap(src, 384, 384 * h / w, true)
+            val m = android.graphics.Matrix().apply { postRotate(rotation.toFloat()) }
+            val up = Bitmap.createBitmap(small, 0, 0, small.width, small.height, m, true)
+            val d = Depth.estimate(this, up)
+            if (up !== small) up.recycle()
+            small.recycle()
+            FloatArray(cols * rows) { t ->
+                val nx = (t % cols + 0.5f) / cols
+                val ny = (t / cols + 0.5f) / rows
+                val (ux, uy) = when (rotation) {
+                    90 -> (1 - ny) to nx
+                    180 -> (1 - nx) to (1 - ny)
+                    270 -> ny to (1 - nx)
+                    else -> nx to ny
+                }
+                d.at(ux, uy)
+            }
+        } catch (_: Throwable) { null }
+        if (src !== b) src.recycle()
+        val cap = min(hi, sharpest * 2f)
+        var filled = 0
+        val sig = FloatArray(cols * rows) { t ->
+            val v = if (!meas[t].isNaN()) meas[t] else {
+                filled++
+                var ws = 0.0; var vs = 0.0
+                for (j in valid) {
+                    val dx = (t % cols - j % cols).toFloat(); val dy = (t / cols - j / cols).toFloat()
+                    var wgt = kotlin.math.exp(-(dx * dx + dy * dy) / 8.0)
+                    if (tileDepth != null) {
+                        val dd = (tileDepth[t] - tileDepth[j]) / 0.1f
+                        wgt *= kotlin.math.exp(-(dd * dd).toDouble())
+                    }
+                    ws += wgt; vs += wgt * meas[j]
+                }
+                if (ws > 1e-9) (vs / ws).toFloat() else sharpest
+            }
+            v.coerceIn(lo, max(lo, cap))
+        }
+        val s0 = max(1e-3f, (sx + sy) / 2f)
+        val bw = b.width.toFloat()
+        val bh = b.height.toFloat()
+        val fn: (Int, Int) -> FloatArray = { qx, qy ->
+            val fx = (qx / bw * cols - 0.5f).coerceIn(0f, cols - 1f)
+            val fy = (qy / bh * rows - 0.5f).coerceIn(0f, rows - 1f)
+            val x0 = fx.toInt(); val y0 = fy.toInt()
+            val x1 = min(cols - 1, x0 + 1); val y1 = min(rows - 1, y0 + 1)
+            val ax = fx - x0; val ay = fy - y0
+            val v = (sig[y0 * cols + x0] * (1 - ax) + sig[y0 * cols + x1] * ax) * (1 - ay) +
+                (sig[y1 * cols + x0] * (1 - ax) + sig[y1 * cols + x1] * ax) * ay
+            floatArrayOf(sx * v / s0, sy * v / s0)
+        }
+        val note = "Schärfe je Stelle: ${cols}×${rows} Felder, ${valid.size} gemessen, $filled ergänzt" +
+            (if (tileDepth != null) " (nach Tiefe)" else "") + " · ${fmt(sig.min())}–${fmt(sig.max())} px (höchstens doppelt so viel wie die schärfste Stelle)"
+        return fn to note
     }
 
     /** Bereich (Spalte/Zeile im Sensorbild) als Lage im aufrecht gedrehten Foto benennen. */
@@ -2565,6 +2673,7 @@ class MainActivity : Activity() {
         m.menu.add(0, 6, 4, if (ispZoomOn) "Quelle: Kamera-Zoom ✓" else "Quelle: ganzes Sensorbild + RAW")
         m.menu.add(0, 11, 5, if (compareOn) "Vergleich A/B (16 gegen ${COMPARE_FRAMES} Bilder): an ✓" else "Vergleich A/B: aus")
         m.menu.add(0, 12, 5, if (hrFocusOn) "Feinfokus (hochaufgelöst): an ✓" else "Feinfokus (hochaufgelöst): aus")
+        m.menu.add(0, 13, 5, if (localBlurOn) "Schärfe je Stelle (bei Tiefe im Bild): an ✓" else "Schärfe je Stelle: aus")
         m.menu.add(0, 7, 5, "Fotos importieren …")
         m.menu.add(0, 3, 6, "Kamera-Check")
         m.setOnMenuItemClickListener {
@@ -2589,6 +2698,12 @@ class MainActivity : Activity() {
                     showProfile(p, "50-MP-Schärfeprofil", "Wird beim Import von 50-MP-Fotos genutzt.", p.samples.map { where50(it.nx, it.ny) })
                 }
                 7 -> pickPhotos()
+                13 -> {
+                    localBlurOn = !localBlurOn
+                    getPreferences(MODE_PRIVATE).edit().putBoolean("localblur", localBlurOn).apply()
+                    showStatus(if (localBlurOn) "Schärfe je Stelle an: bei Tiefe im Bild jede Stelle mit eigener Unschärfe" else "Schärfe je Stelle aus (eine Unschärfe fürs ganze Bild)")
+                    status.postDelayed({ if (!busy) showStatus(null) }, 2500)
+                }
                 12 -> {
                     hrFocusOn = !hrFocusOn
                     getPreferences(MODE_PRIVATE).edit().putBoolean("hrfocus", hrFocusOn).apply()
